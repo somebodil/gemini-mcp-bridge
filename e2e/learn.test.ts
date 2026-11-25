@@ -9,6 +9,7 @@ import type { Page } from "playwright";
 import type { Layout } from "../src/content/layout.ts";
 import { MARK } from "../src/shared/protocol.ts";
 import { startHarness, type Harness } from "./harness.ts";
+import { box, button, learn, sendTest, startLearning } from "./learning.ts";
 
 const MOCK = readFileSync(join(import.meta.dirname, "mock-chat.html"), "utf8");
 const SITE = "https://chat.example.test";
@@ -38,30 +39,6 @@ async function open(path = "/"): Promise<Page> {
   assert.equal(await h.toggle(page), true);
   await page.waitForFunction(() => document.querySelector("gmb-status")?.shadowRoot?.textContent?.includes("tools"), null, { timeout: 10_000 });
   return page;
-}
-
-const button = (page: Page, text: string) => page.locator("gmb-status button", { hasText: text });
-const box = (page: Page) => page.locator("gmb-status .learn");
-
-async function startLearning(page: Page): Promise<void> {
-  await page.locator("gmb-status .pill").click();
-  await button(page, "Learn this page").click();
-  await box(page).waitFor();
-}
-
-async function sendTest(page: Page, how: "click" | "enter" = "click"): Promise<void> {
-  await page.locator("chat-app textarea").click();
-  await page.waitForFunction(() => document.querySelector("chat-app")?.shadowRoot?.querySelector("textarea")?.value.includes("gmb_test"));
-  if (how === "click") await page.locator("chat-app icon-button").click();
-  else await page.locator("chat-app textarea").press("Enter");
-  await box(page).filter({ hasText: "Everything seen" }).waitFor({ timeout: 20_000 });
-}
-
-async function learn(page: Page, how: "click" | "enter" = "click"): Promise<void> {
-  await startLearning(page);
-  await sendTest(page, how);
-  await button(page, "Stop learning").click();
-  await box(page).filter({ hasText: "What the extension learned" }).waitFor();
 }
 
 const found = (page: Page, role: string) => page.locator(`gmb-status .roles li[data-role="${role}"]`).getAttribute("data-found");

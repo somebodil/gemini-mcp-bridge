@@ -14,7 +14,9 @@
       // roots, a textarea, an icon button (with a closed shadow root) that sends and turns into a stop button while
       // the reply is written, the user's messages shown as markdown (code blocks too), replies written out bit by
       // bit, and the whole list drawn anew on every change, as some frameworks do. The list scrolls by itself. The
-      // extension's test message (learning the page) gets the code block it asks for.
+      // extension's test message (learning the page) gets the code block it asks for. Options: __unnamed (the button
+      // has no label and icons no guess can read), __replyClass (the class of replies, changed to act as a page that
+      // changed since it was learned).
       window.__sent = [];
       window.__replies = window.__replies || [];
       window.__initial = window.__initial || [];
@@ -35,7 +37,7 @@
 
       function bubble(m) {
         const d = document.createElement("div");
-        d.className = `msg ${m.role}`;
+        d.className = `msg ${m.role === "model" ? (window.__replyClass ?? "model") : m.role}`;
         // a block still being written has no closing fence yet
         m.text.split(/```[a-z]*\n([\s\S]*?)(?:```|$)/).forEach((part, i) => {
           if (i % 2) {
@@ -83,6 +85,11 @@
             this.draw();
           }
           setButton() {
+            if (window.__unnamed) {
+              this.btn.removeAttribute("aria-label");
+              this.btn.icon = this.generating ? "▢" : "↑";
+              return;
+            }
             this.btn.setAttribute("aria-label", this.generating ? "Stop" : "Send");
             this.btn.icon = this.generating ? "stop" : "send";
           }

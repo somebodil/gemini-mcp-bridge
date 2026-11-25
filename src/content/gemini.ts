@@ -9,7 +9,7 @@
 
 import { t } from "../shared/i18n.ts";
 import { looksLikeCall, MARK, parseCalls, resultsEnd, summarizeResults, TOOLS_HEADING } from "../shared/protocol.ts";
-import { dbg, type Finished, type Item, type Page } from "./page.ts";
+import { dbg, type Finished, type Item, type Page, type Progress } from "./page.ts";
 import { Card, collapse } from "./ui.ts";
 
 const SEL = {
@@ -228,6 +228,7 @@ export class GeminiPage implements Page {
   readonly kind = "gemini";
   readonly addressShared = false;
   private expecting: Expect | null = null;
+  private prog: Progress | null = null;
   private readonly handled = new Set<string>();
   private latest = { id: "", raw: "", since: 0 };
   /** Cards by reply id and block number, for the conversation on the page. */
@@ -281,6 +282,11 @@ export class GeminiPage implements Page {
 
   unexpect(): void {
     this.expecting = null;
+    this.prog = null;
+  }
+
+  progress(): Progress | null {
+    return this.prog;
   }
 
   tick(active: boolean, busy: boolean): Finished | null {
@@ -296,6 +302,9 @@ export class GeminiPage implements Page {
     const list = responses();
     const awaited = this.awaitedReply(list);
     this.decorate(list, awaited?.id, generating);
+    this.prog = this.expecting
+      ? { writing: generating, replySeen: !!awaited, calls: awaited ? codeBlocks(awaited.reply).filter((b) => looksLikeCall(b.text)).length : 0, how: "known" }
+      : null;
     if (busy || generating || !awaited) return null;
     const raw = responseRaw(awaited.reply);
     if (this.latest.id !== awaited.id || this.latest.raw !== raw) {
@@ -307,12 +316,14 @@ export class GeminiPage implements Page {
     this.handled.add(id);
     const given = this.expecting?.given;
     this.expecting = null;
+    this.prog = null;
     dbg("reply finished", id);
     return { items: () => this.itemsOf(reply, id), present: () => replyIds().has(id), given };
   }
 
   otherConversation(): void {
     this.expecting = null;
+    this.prog = null;
     for (const c of this.cards.values()) c.drop();
     this.cards.clear();
     this.handled.clear();

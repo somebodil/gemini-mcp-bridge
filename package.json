@@ -11,7 +11,7 @@
     "lint": "eslint .",
     "test": "node --test \"src/**/*.test.ts\"",
     "check": "npm run typecheck && npm run lint && npm test",
-    "e2e": "node scripts/build.mjs --test && node --test --test-concurrency=1 e2e/mock.test.ts e2e/generic.test.ts e2e/learn.test.ts",
+    "e2e": "node scripts/build.mjs --test && node --test --test-concurrency=1 e2e/mock.test.ts e2e/generic.test.ts e2e/learn.test.ts e2e/learned.test.ts",
     "e2e:live": "node scripts/build.mjs --test && GMB_LIVE=1 node --test e2e/live.test.ts",
     "zip": "npm run build && node scripts/zip.mjs"
   },

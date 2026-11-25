@@ -120,6 +120,19 @@ describe("with a mock Gemini", () => {
       );
     }));
 
+
+  it("follows each exchange in the status line", async () => {
+    await h.setSettings(auto("list_directory"));
+    await withMock([call("list_directory", { path: h.dir }), "There is a-file.txt."], async ({ page }) => {
+      const status = page.locator("gmb-status .flow");
+      await say(page, "What is in my folder?");
+      await status.filter({ hasText: "Sent with the tool instructions" }).waitFor();
+      await status.filter({ hasText: "Sent with the tool results" }).waitFor({ timeout: 20_000 });
+      await status.filter({ hasText: "Done: the reply has no call" }).waitFor({ timeout: 20_000 });
+      await status.waitFor({ state: "detached", timeout: 10_000 });
+      assert.deepEqual(h.calls, ["list_directory"]);
+    });
+  });
   it("sends the instructions once per conversation", () =>
     withMock(["Hello.", "Hi again."], async (m) => {
       await say(m.page, "first");

@@ -209,6 +209,15 @@ export interface Notice {
   action?: { label: string; run: () => void };
 }
 
+/** One line about where the last exchange stands (sent, writing, running, done), with what can be done when stuck. */
+export interface FlowView {
+  text: string;
+  /** Smaller lines under it: what went along with the message, how the reply is found, what to do. */
+  notes?: string[];
+  tone: "busy" | "ok" | "warn";
+  actions?: { label: string; run: () => void }[];
+}
+
 /** The learning of the page as it goes, or what it learned. */
 export type LearnBox =
   | { kind: "learning"; view: LearnView }
@@ -259,6 +268,15 @@ label { display: flex; gap: 8px; align-items: center; cursor: pointer; }
 .steps li.now { font-weight: 600; }
 .mark { text-align: center; font-weight: 600; }
 .detail { grid-column: 2; font-size: 11px; color: var(--muted); word-break: break-all; }
+.flow { position: absolute; right: 0; bottom: 44px; width: max-content; max-width: min(320px, calc(100vw - 32px)); padding: 6px 10px;
+  border-radius: 10px; border: 1px solid var(--line); background: var(--bg); box-shadow: 0 1px 4px rgba(0,0,0,.2); display: grid; gap: 6px; font-size: 12px; }
+.flow.warn { border-color: var(--warn); }
+:host([data-down]) .flow { bottom: auto; top: 44px; }
+:host([data-left]) .flow { right: auto; left: 0; }
+.flow .line { display: flex; align-items: center; gap: 6px; }
+.spin { display: inline-block; width: 9px; height: 9px; border: 2px solid var(--muted); border-top-color: transparent; border-radius: 50%;
+  animation: spin 0.8s linear infinite; flex: none; }
+@keyframes spin { to { transform: rotate(360deg); } }
 .swatch { display: inline-block; width: 9px; height: 9px; border-radius: 2px; background: var(--c); margin-right: 5px; vertical-align: 0; }
 `);
 
@@ -269,6 +287,7 @@ interface PillView {
   /** On a page other than gemini.google.com: when the extension learned this site, null when it did not. */
   site: { learned: number | null } | null;
   learn: LearnBox | null;
+  flow: FlowView | null;
 }
 
 const POS_KEY = "gmb-pill-pos";
@@ -277,7 +296,7 @@ export class Pill {
   readonly host: HTMLElement;
   private readonly root: ShadowRoot;
   private open = false;
-  private last: PillView = { state: null, chatOn: true, notice: null, site: null, learn: null };
+  private last: PillView = { state: null, chatOn: true, notice: null, site: null, learn: null, flow: null };
   private readonly handlers: PillHandlers;
   /** The button was dragged: the click that ends the drag does not open the panel. */
   private dragged = false;
@@ -353,7 +372,7 @@ export class Pill {
     this.last = view;
     if (!this.host.isConnected) document.documentElement.append(this.host);
     this.host.toggleAttribute("data-dark", dark);
-    const { state, chatOn, notice, site, learn } = view;
+    const { state, chatOn, notice, site, learn, flow } = view;
     const live = state?.servers.filter((s) => s.status === "ok") ?? [];
     const failed = state?.servers.some((s) => s.status === "error") ?? false;
     let dot = "";
@@ -376,6 +395,7 @@ export class Pill {
     if (learn && !this.open) children.push(this.learnBox(learn));
     else if (notice && !this.open) children.push(this.noticeBox(notice));
     else if (this.open) children.push(this.panel(state, chatOn, site));
+    else if (flow) children.push(this.flowBox(flow));
     this.root.replaceChildren(...children);
   }
 
@@ -393,6 +413,14 @@ export class Pill {
     const b = h("button", primary ? { class: "primary" } : {}, label);
     onTrustedClick(b, run);
     return b;
+  }
+
+  private flowBox(f: FlowView): HTMLElement {
+    const mark = f.tone === "busy" ? h("span", { class: "spin" }) : h("span", { class: f.tone === "ok" ? "ok" : "warn" }, f.tone === "ok" ? "✓" : "!");
+    const box = h("div", { class: `flow ${f.tone}`, role: "status" }, h("div", { class: "line" }, mark, h("span", { class: "text" }, f.text)));
+    for (const n of f.notes ?? []) box.append(h("div", { class: "small muted note" }, n));
+    if (f.actions?.length) box.append(h("div", { class: "buttons" }, ...f.actions.map((a) => this.button(a.label, a.run))));
+    return box;
   }
 
   private learnBox(box: LearnBox): HTMLElement {

@@ -12,9 +12,21 @@ import { layoutChange, loadLayout, saveLayout, type Layout } from "./layout.ts";
 import { checkLayout, Learner, outlineItems, type RoleResult } from "./learn.ts";
 import { Overlay } from "./overlay.ts";
 import { dbg, describe, pageStructure, type Finished, type Page } from "./page.ts";
-import { installPageStyle, pageIsDark, Pill, removePageStyle, setTheme, type LearnBox, type Notice, type Row } from "./ui.ts";
+import { installPageStyle, pageIsDark, Pill, removePageStyle, setTheme, type FlowView, type LearnBox, type Notice, type Row } from "./ui.ts";
+
+/** Where the exchange that went out last stands, for the status line. */
+type Flow =
+  | { stage: "sent"; at: number; with: ("instructions" | "update" | "results")[]; wroteAt: number }
+  | { stage: "asking" | "running"; at: number; tool: string; i: number; n: number }
+  | { stage: "sending" | "done" | "stopped"; at: number };
 
 const MAX_CALLS_PER_REPLY = 10;
+/** No reply seen this long after sending, the page not writing: the status line says so and what can be done. */
+const STUCK_MS = 45_000;
+/** The same this long after the page stopped writing. */
+const STUCK_AFTER_WRITING_MS = 10_000;
+/** "Done" and "Stopped" stay this long in the status line. */
+const FLOW_SHOWN_MS = 6000;
 const TICK_MS = 400;
 const STATE_MAX_AGE_MS = 30_000;
 /** A held send waits at most this long for a fresh tool list, then goes with the one it has. */
@@ -44,6 +56,11 @@ export function startBridge(page: Page): () => void {
   /** What it learned, shown until the user closes it. */
   let results: { roles: RoleResult[]; saved: boolean } | null = null;
   const overlay = new Overlay();
+  let flow: Flow | null = null;
+  let lastFlowText = "";
+  /** When the status line's "Copy page structure" last copied (it says so for a moment), and whether it could. */
+  let copiedAt = 0;
+  let copiedOk = false;
 
   const pill = new Pill({
     generic: page.kind === "generic",
@@ -54,6 +71,7 @@ export function startBridge(page: Page): () => void {
         run?.abort();
         pendingResults = null;
         notice = null;
+        flow = null;
       }
       render();
     },
@@ -235,6 +253,7 @@ export function startBridge(page: Page): () => void {
     holding = true;
     void (async () => {
       let given: string | undefined;
+      const along: ("instructions" | "update" | "results")[] = [];
       try {
         await freshState(FRESH_WAIT_MS);
         const parts: string[] = [];
@@ -244,10 +263,12 @@ export function startBridge(page: Page): () => void {
           const had = await givenHash();
           if (had !== hash) {
             parts.push(had === null ? buildInstructions(cur.tools, cur.notes) : buildToolsUpdate(cur.tools, cur.notes));
+            along.push(had === null ? "instructions" : "update");
             given = hash;
           }
         }
         if (pendingResults) {
+          along.push("results");
           parts.push(pendingResults);
           pendingResults = null;
           if (notice?.kind === "results") notice = null;
@@ -261,8 +282,10 @@ export function startBridge(page: Page): () => void {
       }
       // still holding until the message is out: an Enter meanwhile would add the text a second time
       try {
-        if (await page.submit()) lastGiven = given ?? lastGiven;
-        else page.unexpect();
+        if (await page.submit()) {
+          lastGiven = given ?? lastGiven;
+          flow = { stage: "sent", at: Date.now(), with: along, wroteAt: 0 };
+        } else page.unexpect();
       } finally {
         holding = false;
         render();
@@ -279,6 +302,7 @@ export function startBridge(page: Page): () => void {
     if (!e.isTrusted) return;
     if (page.isStopClick(e)) {
       userStopped = true;
+      if (flow) flow = { stage: "stopped", at: Date.now() };
       return;
     }
     if (page.isSendClick(e)) onUserSend(e);
@@ -292,6 +316,8 @@ export function startBridge(page: Page): () => void {
     if (page.address() !== lastAddress) onNavigate(lastAddress);
     setTheme(pageIsDark());
     const finished = page.tick(active() && !learner, run !== null);
+    if (flow?.stage === "sent" && page.progress()?.writing) flow.wroteAt = Date.now();
+    if (flowText() !== lastFlowText) render();
     if (!finished) return;
     // the answer came: the instructions reached this conversation
     const key = page.givenKey();
@@ -312,6 +338,7 @@ export function startBridge(page: Page): () => void {
       rounds = 0;
       notice = null;
       pendingResults = null;
+      flow = null;
       page.otherConversation();
       sessionStorage.removeItem("gmb-off:new");
     }
@@ -322,16 +349,25 @@ export function startBridge(page: Page): () => void {
   // 3. Running the calls and sending the results
 
   async function handleReply(f: Finished): Promise<void> {
-    if (!active() || userStopped) return;
+    if (!active() || userStopped) {
+      if (flow?.stage !== "stopped") flow = null;
+      render();
+      return;
+    }
     const items = f.items();
     dbg(
       "calls",
       items.map((it) => it.calls.map((c) => c.tool)),
       items.map((it) => it.problems),
     );
-    if (!items.length) return;
+    if (!items.length) {
+      flow = { stage: "done", at: Date.now() };
+      render();
+      return;
+    }
     // the limit holds before anything runs: the calls of this reply wait for "Continue"
     if (rounds >= (state?.behavior.maxRounds ?? 20)) {
+      flow = null;
       for (const it of items) it.card.setCalls(it.calls, it.problems, "skipped");
       notice = {
         kind: "paused",
@@ -356,6 +392,10 @@ export function startBridge(page: Page): () => void {
       await freshState();
       const outcomes: Outcome[] = [];
       let count = 0;
+      const total = Math.min(
+        MAX_CALLS_PER_REPLY,
+        items.reduce((n, it) => n + it.calls.length, 0),
+      );
       for (const it of items) {
         const rows = it.card.setCalls(it.calls, it.problems, "waiting");
         for (const p of it.problems) {
@@ -376,7 +416,7 @@ export function startBridge(page: Page): () => void {
             outcomes.push({ tool: call.tool, ok: false, text: `Not run: at most ${MAX_CALLS_PER_REPLY} calls per reply. Call it again in the next reply.` });
             continue;
           }
-          outcomes.push(await runCall(call, rows[k], ctrl.signal));
+          outcomes.push(await runCall(call, rows[k], ctrl.signal, count, total));
         }
       }
       // the user went to another chat or turned the tools off: the results do not go anywhere
@@ -387,7 +427,12 @@ export function startBridge(page: Page): () => void {
     }
   }
 
-  async function runCall(call: ParsedCall, row: Row, signal: AbortSignal): Promise<Outcome> {
+  function setFlow(f: Flow | null): void {
+    flow = f;
+    render();
+  }
+
+  async function runCall(call: ParsedCall, row: Row, signal: AbortSignal, i: number, n: number): Promise<Outcome> {
     let tool: ExposedTool | undefined = state?.tools.find((x) => x.name === call.tool);
     if (!tool) {
       // the page's list may be old (the server came up later): ask the service worker for the current one
@@ -402,6 +447,7 @@ export function startBridge(page: Page): () => void {
     const known = tool;
     let approved = false;
     const ask = async (): Promise<Outcome | null> => {
+      setFlow({ stage: "asking", at: Date.now(), tool: call.tool, i, n });
       const decision = await row.ask(signal);
       if (decision === "deny") {
         row.set("denied");
@@ -419,6 +465,7 @@ export function startBridge(page: Page): () => void {
       if (refused) return refused;
     }
     row.set("running");
+    setFlow({ stage: "running", at: Date.now(), tool: call.tool, i, n });
     let r = await callTool(call.tool, call.arguments, approved, signal);
     if (r.needsApproval) {
       // the tool was set to "ask" after the page's list was fetched
@@ -433,6 +480,7 @@ export function startBridge(page: Page): () => void {
 
   async function deliver(message: string): Promise<void> {
     const draft = page.editorText();
+    flow = null;
     if (state && !state.behavior.autoSend) {
       page.replaceText(draft ? `${message}\n\n${draft}` : message);
       notice = { kind: "inBox", text: t("resultsInBox") };
@@ -463,17 +511,74 @@ export function startBridge(page: Page): () => void {
 
   async function sendNow(message: string, draft: string): Promise<void> {
     notice = null;
+    setFlow({ stage: "sending", at: Date.now() });
     const text = draft ? `${message}\n\n${draft}` : message;
     page.replaceText(text);
     rounds++;
     page.expect(text);
     const ok = await page.submit();
     dbg("results sent", ok);
-    if (!ok) {
+    if (ok) flow = { stage: "sent", at: Date.now(), with: ["results"], wroteAt: 0 };
+    else {
+      flow = null;
       page.unexpect();
       notice = { kind: "sendFailed", text: t("sendFailed") };
     }
     render();
+  }
+
+  // -------------------------------------------------------------------------------------------------------
+  // The status line: where the last exchange stands
+
+  function flowView(): FlowView | null {
+    const f = flow;
+    if (!f || !active() || learner) return null;
+    const now = Date.now();
+    switch (f.stage) {
+      case "sent": {
+        const p = page.progress();
+        // the page no longer waits (the answer took too long to start)
+        if (!p && now - f.at > 2500) return null;
+        const notes: string[] = [];
+        const what = f.with.map((w) => t(w === "instructions" ? "withInstructions" : w === "update" ? "withUpdate" : "withResults"));
+        if (what.length) notes.push(t("flowSentWith", { s: what.join(", ") }));
+        if (p?.how === "guessed") notes.push(layout ? t("flowLearnedMissing") : t("flowGuessing"));
+        if (!p) return { text: t("flowSent"), tone: "busy", notes };
+        if (p.writing) return { text: t("flowWriting"), tone: "busy", notes };
+        if (p.replySeen && p.calls) return { text: t("flowReplyCalls", { n: p.calls }), tone: "busy", notes };
+        if (p.replySeen) return { text: t("flowReplyEnd"), tone: "busy", notes };
+        const stuck = now - f.at > STUCK_MS || (f.wroteAt > 0 && now - f.wroteAt > STUCK_AFTER_WRITING_MS);
+        if (!stuck) return { text: t("flowWaiting"), tone: "busy", notes };
+        const actions: FlowView["actions"] = [];
+        if (page.kind === "generic") actions.push({ label: layout ? t("learnAgain") : t("learnStart"), run: () => startLearning() });
+        const copiedNow = now - copiedAt < 2500;
+        actions.push({
+          label: copiedNow ? (copiedOk ? `✓ ${t("copied")}` : t("copyFailed")) : t("copyStructure"),
+          run: () =>
+            void copy(pageStructure()).then((ok) => {
+              copiedAt = Date.now();
+              copiedOk = ok;
+              render();
+            }),
+        });
+        return { text: t("flowStuck"), tone: "warn", notes: [page.kind === "generic" ? t("flowStuckHint") : t("flowStuckHintKnown")], actions };
+      }
+      case "asking":
+        return { text: t("flowAsking", { tool: f.tool }), tone: "warn" };
+      case "running":
+        return { text: t("flowRunning", { tool: f.tool, i: f.i, n: f.n }), tone: "busy" };
+      case "sending":
+        return { text: t("flowSending"), tone: "busy" };
+      case "done":
+        return now - f.at < FLOW_SHOWN_MS ? { text: t("flowDone"), tone: "ok" } : null;
+      case "stopped":
+        return now - f.at < FLOW_SHOWN_MS ? { text: t("flowStopped"), tone: "ok" } : null;
+    }
+  }
+
+  function flowText(): string {
+    const v = flowView();
+    return v ? `${v.tone}|${v.text}|${v.notes?.join("|") ?? ""}|${v.actions?.map((a) => a.label).join("|") ?? ""}` : "";
   }
 
   // -------------------------------------------------------------------------------------------------------
@@ -498,7 +603,7 @@ export function startBridge(page: Page): () => void {
     dbg("learned", r.layout, r.roles.map((x) => `${x.role}:${x.found}`));
     const learned = r.layout;
     if (learned) {
-      layout = learned;
+      setLayout(learned);
       overlay.show(() => outlineItems(learned));
       void saveLayout(learned).catch((err) => dbg("could not keep the layout", err));
     }
@@ -528,7 +633,14 @@ export function startBridge(page: Page): () => void {
   // -------------------------------------------------------------------------------------------------------
 
   function render(): void {
-    if (!stopped) pill.render({ state, chatOn: chatOn(), notice, site: page.kind === "generic" ? { learned: layout?.at ?? null } : null, learn: learnBox() });
+    if (stopped) return;
+    lastFlowText = flowText();
+    pill.render({ state, chatOn: chatOn(), notice, site: page.kind === "generic" ? { learned: layout?.at ?? null } : null, learn: learnBox(), flow: flowView() });
+  }
+
+  function setLayout(l: Layout | null): void {
+    layout = l;
+    page.useLayout?.(l);
   }
 
   const onStorage = (changes: Record<string, chrome.storage.StorageChange>, area: string) => {
@@ -538,7 +650,7 @@ export function startBridge(page: Page): () => void {
     // learned in another tab of the site, or forgotten on the options page
     const l = page.kind === "generic" ? layoutChange(changes) : undefined;
     if (l !== undefined) {
-      layout = l;
+      setLayout(l);
       render();
     }
   };
@@ -578,7 +690,7 @@ export function startBridge(page: Page): () => void {
   void refreshState();
   if (page.kind === "generic")
     void loadLayout().then((l) => {
-      layout = l;
+      setLayout(l);
       render();
     });
   render();

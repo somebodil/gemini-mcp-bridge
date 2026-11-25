@@ -11,9 +11,34 @@
 // blocks. When the address changes, the conversation is the same while the page still shows the message that
 // went out (a new chat may get its address only as its answer is written); otherwise the other chat's blocks
 // count as there before.
+//
+// Once the user taught the extension the page (learn.ts), it goes by what it learned where the page has it: the
+// learned input box, send button and writing indicator, and the answer is the learned kind of reply right after
+// the user's message that holds the end of what went out; only the code blocks in it count. Where the learned
+// elements are not on the page (the page changed), it guesses as above.
 
 import { looksLikeCall, MARK, parseCalls } from "../shared/protocol.ts";
-import { buttonOf, SEND, STOP, dbg, deepElements, deepTarget, editableOf, isButtonish, nameOf, parentOf, shadowOf, typeText, usable, valueOf, type Finished, type Item, type Page } from "./page.ts";
+import { contains, deepText, findAll, letters, lookOf, matchesPattern, resolve, type Layout } from "./layout.ts";
+import {
+  buttonOf,
+  dbg,
+  deepElements,
+  deepTarget,
+  editableOf,
+  isButtonish,
+  nameOf,
+  parentOf,
+  SEND,
+  shadowOf,
+  STOP,
+  typeText,
+  usable,
+  valueOf,
+  type Finished,
+  type Item,
+  type Page,
+  type Progress,
+} from "./page.ts";
 import { Card } from "./ui.ts";
 
 /** A reply's blocks unchanged this long (and the page not writing): the reply is finished. */
@@ -23,11 +48,11 @@ const UNREADABLE_STABLE_MS = 6000;
 /** Past this, a stop button that never goes away (a wrong guess) does not hold the reply back. */
 const GENERATING_MAX_MS = 20_000;
 const EXPECT_MAX_MS = 5 * 60_000;
+/** A learned reply without a call and without a learned writing indicator: finished when it stood still this long. */
+const NO_INDICATOR_STABLE_MS = 6000;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const squash = (s: string) => s.replace(/\s+/g, "");
-/** Letters and digits only: a message shown as markdown loses its marks, not those. */
-const letters = (s: string) => s.replace(/[^\p{L}\p{N}]+/gu, "");
 /** The text of the whole page, shadow roots included. */
 function pageText(): string {
   const body = document.body ?? document.documentElement;
@@ -67,10 +92,10 @@ interface Block {
   text: string;
 }
 
-/** Code blocks on the page in document order: <pre>, and <code> of more than one line outside one. */
-function codeBlocks(): Block[] {
+/** Code blocks under `root` (the page) in document order: <pre>, and <code> of more than one line outside one. */
+function codeBlocks(root: Element = document.body ?? document.documentElement): Block[] {
   const out: Block[] = [];
-  for (const el of deepElements(document.body ?? document.documentElement)) {
+  for (const el of deepElements(root)) {
     if (el.localName !== "pre" && el.localName !== "code") continue;
     if (el.localName === "code" && el.closest("pre")) continue;
     const text = el.textContent ?? "";
@@ -90,6 +115,8 @@ interface Expect {
   at: number;
   sawGenerating: boolean;
   given?: string;
+  /** The user's messages of the learned kind on the page when it went out. */
+  mineCount: number;
 }
 
 export class GenericPage implements Page {
@@ -104,6 +131,8 @@ export class GenericPage implements Page {
   private generatingSince = 0;
   private generatingAt = 0;
   private readonly cards = new Map<Element, Card>();
+  private layout: Layout | null = null;
+  private prog: Progress | null = null;
 
   constructor() {
     window.addEventListener("focusin", this.onFocus, true);
@@ -114,9 +143,20 @@ export class GenericPage implements Page {
     if (ed) this.ed = ed;
   };
 
-  /** The input box: the one the user wrote in last, else the last one on the page that one can write in. */
+  useLayout(layout: Layout | null): void {
+    this.layout = layout;
+  }
+
+  progress(): Progress | null {
+    return this.prog;
+  }
+
+  /** The input box: the one the user wrote in last, else the learned one, else the last one on the page that one can write in. */
   private editor(): HTMLElement | null {
     if (this.ed?.isConnected) return this.ed;
+    const learned = resolve(this.layout?.input);
+    const box = learned ? editableOf(learned) : null;
+    if (box?.getClientRects().length) return (this.ed = box);
     let found: HTMLElement | null = null;
     for (const el of deepElements(document.body ?? document.documentElement)) {
       const box = el instanceof HTMLTextAreaElement || (el instanceof HTMLElement && el.isContentEditable && !el.parentElement?.isContentEditable);
@@ -176,7 +216,7 @@ export class GenericPage implements Page {
     while (Date.now() - start < timeoutMs) {
       if ((clickedAt || entered) && went()) return true;
       if (!clickedAt) {
-        const b = buttonNear(ed, SEND, STOP);
+        const b = this.sendButton(ed);
         if (b) {
           b.click();
           clickedAt = Date.now();
@@ -184,7 +224,7 @@ export class GenericPage implements Page {
       }
       // Enter when there is no send button, or when the click did nothing (the button is still there, ready):
       // never after a click the page took (it may clear the box only once its server answered)
-      const pressNow = clickedAt ? Date.now() - clickedAt > 1500 && buttonNear(ed, SEND, STOP) !== null : Date.now() - start > 1000;
+      const pressNow = clickedAt ? Date.now() - clickedAt > 1500 && this.sendButton(ed) !== null : Date.now() - start > 1000;
       if (!entered && pressNow) {
         ed.focus();
         pressEnter(ed);
@@ -202,20 +242,44 @@ export class GenericPage implements Page {
     return valueOf(ed) !== "";
   }
 
+  /** The send button: the learned one (while it sends), else one named like it near the input box. */
+  private sendButton(ed: HTMLElement): HTMLElement | null {
+    const learned = resolve(this.layout?.send);
+    if (learned instanceof HTMLElement) return usable(learned) && !this.isGenerating() ? learned : null;
+    return buttonNear(ed, SEND, STOP);
+  }
+
+  /** The click went to `learned` (or to the button around it). */
+  private clickedOn(e: MouseEvent, learned: Element | null): boolean {
+    if (!learned) return false;
+    const b = buttonOf(e);
+    const target = b ?? deepTarget(e);
+    return !!target && (contains(learned, target) || (!!b && contains(b, learned)));
+  }
+
   isSendClick(e: MouseEvent): boolean {
+    if (this.editorText() === "") return false;
+    if (this.clickedOn(e, resolve(this.layout?.send)) && !this.isGenerating()) return true;
     const b = buttonOf(e);
     if (!b) return false;
     const name = nameOf(b);
-    return SEND.test(name) && !STOP.test(name) && this.editorText() !== "";
+    return SEND.test(name) && !STOP.test(name);
   }
 
   isStopClick(e: MouseEvent): boolean {
+    const l = this.layout;
+    if ((this.clickedOn(e, resolve(l?.busy?.at)) || this.clickedOn(e, resolve(l?.send))) && this.isGenerating()) return true;
     const b = buttonOf(e);
     return !!b && STOP.test(nameOf(b));
   }
 
-  /** A stop button near the input box: the page is writing a reply. */
+  /** The learned writing indicator looks as it did while the page wrote; without one, a stop button near the input box. */
   private isGenerating(): boolean {
+    const busy = this.layout?.busy;
+    if (busy) {
+      const el = resolve(busy.at);
+      if (el || busy.look === "absent") return lookOf(el) === busy.look;
+    }
     const ed = this.editor();
     return !!ed && buttonNear(ed, STOP) !== null;
   }
@@ -248,7 +312,8 @@ export class GenericPage implements Page {
   }
 
   expect(text: string, given?: string): void {
-    this.expecting = { ...this.baseline(), sent: squash(text), at: Date.now(), sawGenerating: false, given };
+    const mineCount = this.turns().filter((x) => x.mine).length;
+    this.expecting = { ...this.baseline(), sent: squash(text), at: Date.now(), sawGenerating: false, given, mineCount };
     this.lastTail = letters(text).slice(-60);
     this.latest = { sig: "", since: Date.now() };
     dbg("expecting", this.expecting.before.size, this.expecting.last?.localName);
@@ -256,6 +321,49 @@ export class GenericPage implements Page {
 
   unexpect(): void {
     this.expecting = null;
+    this.prog = null;
+  }
+
+  /** The user's messages and the replies in the list, in page order, by the learned kinds; none when not learned. */
+  private turns(): { mine: boolean; el: Element }[] {
+    const l = this.layout;
+    if (!l?.reply) return [];
+    const out: { mine: boolean; el: Element }[] = [];
+    let outer: Element | null = null;
+    for (const el of deepElements(resolve(l.list) ?? document.body ?? document.documentElement)) {
+      if (outer && contains(outer, el)) continue;
+      const mine = !!l.mine && matchesPattern(el, l.mine);
+      if (mine || matchesPattern(el, l.reply)) {
+        out.push({ mine, el });
+        outer = el;
+      }
+    }
+    return out;
+  }
+
+  /**
+   * The answer by the learned kinds: the reply right after the user's message that holds the end of what went
+   * out (else after a message that came after the ones there were). `learned` is false where the page has none of
+   * the learned kinds (then the extension guesses).
+   */
+  private awaitedByLayout(e: Expect): { learned: boolean; reply: Element | null } {
+    const turns = this.turns();
+    if (!turns.length) return { learned: false, reply: null };
+    let at = -1;
+    for (let i = turns.length - 1; i >= 0 && at < 0; i--) if (turns[i].mine && letters(deepText(turns[i].el)).includes(this.lastTail)) at = i;
+    if (at < 0) {
+      const mine = turns.flatMap((x, i) => (x.mine ? [i] : []));
+      if (mine.length > e.mineCount) at = mine.at(-1) as number;
+    }
+    const next = at >= 0 ? turns[at + 1] : undefined;
+    return { learned: true, reply: next && !next.mine ? next.el : null };
+  }
+
+  /** The code blocks of a reply: of the learned kind, else <pre> and <code> of more than one line. */
+  private blocksIn(reply: Element): Block[] {
+    const kind = this.layout?.code;
+    const els = kind ? findAll(kind, reply) : codeBlocks(reply).map((b) => b.el);
+    return els.map((el) => ({ el: el as HTMLElement, text: deepText(el) }));
   }
 
   /** What is on the page now: none of it is the answer. */
@@ -289,7 +397,10 @@ export class GenericPage implements Page {
   tick(active: boolean, busy: boolean): Finished | null {
     if (this.cards.size) this.keepCards(busy);
     const e = this.expecting;
-    if (!e || !active) return null;
+    if (!e || !active) {
+      this.prog = null;
+      return null;
+    }
     const now = Date.now();
     const generating = this.isGenerating();
     if (generating) {
@@ -297,9 +408,13 @@ export class GenericPage implements Page {
       this.generatingSince ||= now;
       this.generatingAt = now;
     } else this.generatingSince = 0;
-    const blocks = this.fresh(e);
+    const byLayout = this.awaitedByLayout(e);
+    const reply = byLayout.reply;
+    const blocks = byLayout.learned ? (reply ? this.blocksIn(reply).filter((b) => looksLikeCall(b.text) && !e.sent.includes(squash(b.text))) : []) : this.fresh(e);
+    this.prog = { writing: generating, replySeen: byLayout.learned ? !!reply : blocks.length > 0, calls: blocks.length, how: byLayout.learned ? "learned" : "guessed" };
     for (const b of blocks) this.show(b, "waiting");
-    const sig = blocks.map((b) => b.text).join("\u0000");
+    // with the learned reply, its whole text tells whether it is still written
+    const sig = (reply ? `${squash(deepText(reply))}\u0001` : "") + blocks.map((b) => b.text).join("\u0000");
     if (sig !== this.latest.sig) {
       this.latest = { sig, since: now };
       return null;
@@ -308,10 +423,13 @@ export class GenericPage implements Page {
     // of a reply only as it finishes it
     const quiet = now - Math.max(this.latest.since, this.generatingAt);
     if (!blocks.length) {
-      // an answer without a call: done once the page stopped writing (seen only when it shows a stop button)
-      if (e.sawGenerating && !generating && quiet > STABLE_MS) {
+      // an answer without a call: done once the page stopped writing (seen only when it shows that it writes); a
+      // learned reply on a page without a learned indicator, once it stood still for a while
+      const stillLong = !!reply && !this.layout?.busy && quiet > NO_INDICATOR_STABLE_MS;
+      if ((e.sawGenerating && !generating && quiet > STABLE_MS && (!byLayout.learned || reply)) || stillLong) {
         dbg("answer without calls");
         this.expecting = null;
+        this.prog = null;
         return { items: () => [], present: () => true, given: e.given };
       }
       if (!generating && now - e.at > EXPECT_MAX_MS) this.expecting = null;
@@ -321,7 +439,8 @@ export class GenericPage implements Page {
     const unreadable = blocks.some((b) => parseCalls([b.text]).problems.length);
     if (quiet < (unreadable ? UNREADABLE_STABLE_MS : STABLE_MS)) return null;
     this.expecting = null;
-    dbg("reply finished", blocks.length);
+    this.prog = null;
+    dbg("reply finished", blocks.length, byLayout.learned ? "learned" : "guessed");
     return {
       items: () => {
         const items: Item[] = [];
@@ -353,7 +472,8 @@ export class GenericPage implements Page {
     }
     const live = lost.filter(([, card]) => card.mode === "live");
     if (!live.length) return;
-    const free = codeBlocks().filter((b) => !this.cards.has(b.el));
+    const all = this.layout?.code ? this.turns().flatMap((x) => (x.mine ? [] : this.blocksIn(x.el))) : codeBlocks();
+    const free = (all.length ? all : codeBlocks()).filter((b) => !this.cards.has(b.el));
     for (const [el, card] of live) {
       const i = free.findIndex((b) => squash(b.text) === squash(card.text));
       if (i < 0) continue;
@@ -391,6 +511,7 @@ export class GenericPage implements Page {
 
   stop(): void {
     this.expecting = null;
+    this.prog = null;
     window.removeEventListener("focusin", this.onFocus, true);
     for (const c of this.cards.values()) c.drop();
     this.cards.clear();

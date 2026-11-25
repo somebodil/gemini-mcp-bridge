@@ -169,7 +169,8 @@ export const sameLocator = (a: Locator | undefined, b: Locator | undefined) => !
 /** Tags that say what they are: a pattern may be the tag alone. */
 const TELLING_TAGS = new Set(["pre", "code", "article", "li", "section"]);
 
-function matches(el: Element, sel: string): boolean {
+/** `el` is of the kind (a broken selector matches nothing). */
+export function matchesPattern(el: Element, sel: string): boolean {
   try {
     return el.matches(sel);
   } catch {
@@ -191,7 +192,7 @@ export function patternOf(example: Element, avoid: Element[]): Pattern | null {
   for (const sel of [...own, ...withParent]) {
     const bare = sel === CSS.escape(example.localName);
     if (bare && !example.localName.includes("-") && !TELLING_TAGS.has(example.localName)) continue;
-    if (matches(example, sel) && !avoid.some((a) => matches(a, sel))) return sel;
+    if (matchesPattern(example, sel) && !avoid.some((a) => matchesPattern(a, sel))) return sel;
   }
   return null;
 }
@@ -203,7 +204,7 @@ export function findAll(pattern: Pattern | undefined, root: Element | Document, 
   let outer: Element | null = null;
   for (const el of deepElements(root)) {
     if (outer && contains(outer, el)) continue;
-    if (matches(el, pattern)) {
+    if (matchesPattern(el, pattern)) {
       out.push(el);
       outer = el;
       if (out.length >= limit) break;

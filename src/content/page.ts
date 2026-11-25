@@ -2,6 +2,7 @@
 // element, generic.ts finds its way on any other chat page (Gemini Enterprise and the like).
 
 import type { ParsedCall, ParseProblem } from "../shared/protocol.ts";
+import type { Layout } from "./layout.ts";
 import type { Card } from "./ui.ts";
 
 /** The calls of one code block of a reply, with the card that shows them. */
@@ -19,6 +20,18 @@ export interface Finished {
   present(): boolean;
   /** Hash of the instructions the message carried: they reached the conversation. */
   given?: string;
+}
+
+/** What the page shows of the answer to the message that went out, for the status line. */
+export interface Progress {
+  /** The page shows that it is writing. */
+  writing: boolean;
+  /** The answer is on the page (it may still grow). */
+  replySeen: boolean;
+  /** Call blocks in it so far. */
+  calls: number;
+  /** How the answer is found: the page is known (gemini.google.com), learned, or guessed. */
+  how: "known" | "learned" | "guessed";
 }
 
 export interface Page {
@@ -60,6 +73,10 @@ export interface Page {
   otherConversation(): void;
   /** The bridge was turned off in the tab: everything the page got from the extension goes. */
   stop(): void;
+  /** While a message is awaited (as of the last tick): what the page shows of the answer. */
+  progress(): Progress | null;
+  /** What the extension learned about the site (pages it does not know). */
+  useLayout?(layout: Layout | null): void;
 }
 
 /** With localStorage["gmb-debug"] = "1" on the page, the steps go to the console. */
