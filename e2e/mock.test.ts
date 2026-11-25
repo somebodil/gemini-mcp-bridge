@@ -60,6 +60,7 @@ async function withMock(replies: string[], fn: (m: Mock) => Promise<void>, opts:
       [replies, opts.initial ?? [], opts.delay ?? 500] as const,
     );
     await page.goto("https://gemini.google.com/app");
+    assert.equal(await h.toggle(page), true);
     await page.waitForFunction(() => document.querySelector("gmb-status")?.shadowRoot?.textContent?.includes("tools"), null, { timeout: 10_000 });
     await fn({ page, logs });
   } finally {
@@ -506,15 +507,80 @@ describe("options page", () => {
   });
 });
 
+describe("on only in the tabs where the user turned it on", () => {
+  const status = (page: Page) => page.evaluate(() => document.querySelector("gmb-status") !== null);
+
+  it("is not in a tab until it is turned on there, and not in the other tabs", async () => {
+    const other = await h.context.newPage();
+    try {
+      // another address: the tests find a tab by its address
+      await other.goto("https://gemini.google.com/app?other");
+      await withMock(["Hello."], async () => {
+        await other.waitForTimeout(1000);
+        assert.equal(await status(other), false);
+      });
+    } finally {
+      await other.close();
+    }
+  });
+
+  it("turns off and on again with the icon; off, messages go as written", () =>
+    withMock(["Hello.", "Hi."], async (m) => {
+      assert.equal(await h.toggle(m.page), false);
+      await m.page.waitForFunction(() => document.querySelector("gmb-status") === null);
+      await say(m.page, "while off");
+      await waitSent(m.page, 1);
+      assert.equal((await sent(m.page))[0], "while off");
+      assert.equal(await h.toggle(m.page), true);
+      await m.page.waitForFunction(() => document.querySelector("gmb-status")?.shadowRoot?.textContent?.includes("tools"));
+      await say(m.page, "on again");
+      await waitSent(m.page, 2);
+      assert.ok((await sent(m.page))[1].startsWith(MARK.instructions));
+    }));
+
+  it("turns off from its panel", () =>
+    withMock(["Hello."], async ({ page }) => {
+      await page.locator("gmb-status .pill").click();
+      await page.locator("gmb-status").getByRole("button", { name: "Turn off in this tab" }).click();
+      await page.waitForFunction(() => document.querySelector("gmb-status") === null);
+      const on = await h.worker.evaluate(async () => (await chrome.storage.session.get("activeTabs")).activeTabs as Record<string, string>);
+      assert.deepEqual(Object.values(on), []);
+    }));
+
+  it("stays on when the page is reloaded", () =>
+    withMock(["Hello."], async ({ page }) => {
+      await page.reload();
+      await page.waitForFunction(() => document.querySelector("gmb-status")?.shadowRoot?.textContent?.includes("tools"), null, { timeout: 10_000 });
+      await say(page, "after reload");
+      await waitSent(page, 1);
+      assert.ok((await sent(page))[0].startsWith(MARK.instructions));
+    }));
+
+  it("copies the page's structure without its text", () =>
+    withMock(["Hello."], async (m) => {
+      await m.page.context().grantPermissions(["clipboard-read", "clipboard-write"], { origin: "https://gemini.google.com" });
+      await say(m.page, "a private question");
+      await waitLog(m, /reply finished/);
+      await m.page.locator("gmb-status .pill").click();
+      await m.page.locator("gmb-status").getByRole("button", { name: "Copy page structure" }).click();
+      await m.page.locator("gmb-status").getByRole("button", { name: "✓ Copied" }).waitFor();
+      const text = await m.page.evaluate(() => navigator.clipboard.readText());
+      assert.match(text, /^https:\/\/gemini\.google\.com\/app/);
+      assert.match(text, /rich-textarea\n\s+div\.ql-editor[^\n]*\[contenteditable="true"\]/);
+      assert.match(text, /user-query/);
+      assert.doesNotMatch(text, /private question|Hello|gmb-status|gmb-card/);
+    }));
+});
+
 // last: it reloads the extension
 describe("after the extension is updated", () => {
-  it("lets Enter through in an open tab, and says to reload", () =>
+  it("leaves the open tabs, and lets Enter through", () =>
     withMock(["Hello."], async ({ page }) => {
       await h.worker.evaluate(() => chrome.runtime.reload());
       await h.context.waitForEvent("serviceworker", { timeout: 10_000 }).catch(() => undefined);
       await say(page, "after the update");
       await waitSent(page, 1);
       assert.equal((await sent(page))[0], "after the update", "sent as written, without instructions");
-      await page.waitForFunction(() => document.querySelector("gmb-status")?.shadowRoot?.textContent?.includes("reload this page"), null, { timeout: 5000 });
+      await page.waitForFunction(() => document.querySelector("gmb-status") === null, null, { timeout: 5000 });
     }));
 });

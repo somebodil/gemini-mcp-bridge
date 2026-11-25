@@ -20,9 +20,10 @@ The extension is not in the Chrome Web Store yet; it is installed from the relea
 ```
 Give Gemini on the web the tools of your own computer.
 
-Gemini MCP Bridge connects gemini.google.com to MCP servers running on your computer. You chat with Gemini as usual. When Gemini needs your computer, it calls a tool: list a folder, read a file, run a command, or anything a local MCP server offers. The result goes back to Gemini by itself.
+Gemini MCP Bridge connects Gemini on the web (gemini.google.com, Gemini Enterprise, and other chat pages) to MCP servers running on your computer. You chat with Gemini as usual. When Gemini needs your computer, it calls a tool: list a folder, read a file, run a command, or anything a local MCP server offers. The result goes back to Gemini by itself.
 
 HOW IT WORKS
+• Click the extension's icon in the tab where you chat: it works in that tab only, until you click again.
 • The first message of a conversation carries instructions and the list of your tools; on the page they fold into a small chip.
 • Gemini answers with a tool call. A card under it shows the tool and its arguments.
 • Press Run, and the call goes to the MCP server on your computer. The result is sent back to Gemini, which continues.
@@ -48,9 +49,10 @@ This extension is not made by or affiliated with Google.
 ```
 웹의 Gemini에게 내 컴퓨터의 도구를 줍니다.
 
-Gemini MCP Bridge는 gemini.google.com을 내 컴퓨터에서 도는 MCP 서버와 이어 줍니다. 평소처럼 Gemini와 대화하면, Gemini가 컴퓨터가 필요할 때 도구를 부릅니다: 폴더 보기, 파일 읽기, 명령 실행, 그리고 로컬 MCP 서버가 주는 모든 것. 결과는 저절로 Gemini에게 돌아갑니다.
+Gemini MCP Bridge는 웹의 Gemini(gemini.google.com, Gemini Enterprise, 다른 채팅 페이지)를 내 컴퓨터에서 도는 MCP 서버와 이어 줍니다. 평소처럼 Gemini와 대화하면, Gemini가 컴퓨터가 필요할 때 도구를 부릅니다: 폴더 보기, 파일 읽기, 명령 실행, 그리고 로컬 MCP 서버가 주는 모든 것. 결과는 저절로 Gemini에게 돌아갑니다.
 
 동작 방식
+• 채팅하는 탭에서 확장 아이콘을 누르세요. 다시 누를 때까지 그 탭에서만 동작합니다.
 • 대화의 첫 메시지에 지침과 도구 목록이 함께 가고, 페이지에서는 작은 칩으로 접힙니다.
 • Gemini가 도구 호출로 답하면, 그 아래 카드에 도구와 인자가 보입니다.
 • 실행을 누르면 호출이 내 컴퓨터의 MCP 서버로 가고, 결과가 Gemini에게 돌아가 대화가 이어집니다.
@@ -73,13 +75,13 @@ Gemini MCP Bridge는 gemini.google.com을 내 컴퓨터에서 도는 MCP 서버�
 
 ## Privacy practices
 
-**Single purpose:** Let Gemini on gemini.google.com call tools of MCP servers that run on the user's own computer, and return the results into the conversation.
+**Single purpose:** Let Gemini on the web (in the tabs where the user turns the extension on) call tools of MCP servers that run on the user's own computer, and return the results into the conversation.
 
 **Permission justifications:**
 
 - `storage`: keeps the user's settings (MCP server addresses and tokens, the choice for each tool) and, per conversation, a hash of the tool list already sent.
 - Host permissions `http://127.0.0.1/*`, `http://localhost/*`: the extension sends the tool calls to MCP servers on the user's own computer, at the addresses the user enters. No other host.
-- Content script on `https://gemini.google.com/*`: reads Gemini's replies to find tool calls, shows the approval cards, and types the results into the input box.
+- `activeTab` and `scripting`: when the user clicks the extension's icon in a tab, the page script goes into that tab only. It reads the replies to find tool calls, shows the approval cards, and types the results into the input box. No site is reached without that click; there are no content scripts declared for any site.
 
 **Remote code:** No. All code is in the package.
 

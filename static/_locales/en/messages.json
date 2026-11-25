@@ -1,4 +1,11 @@
 {
-  "extName": { "message": "Gemini MCP Bridge" },
-  "extDescription": { "message": "Lets Gemini on the web use MCP tools on your own computer: your shell, your files, and any local MCP server." }
+  "extName": {
+    "message": "Gemini MCP Bridge"
+  },
+  "extDescription": {
+    "message": "Lets Gemini on the web use MCP tools on your own computer: your shell, your files, and any local MCP server."
+  },
+  "actionTitle": {
+    "message": "Turn MCP Bridge on or off in this tab"
+  }
 }

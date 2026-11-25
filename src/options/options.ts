@@ -142,6 +142,7 @@ function render(): void {
   });
   app.replaceChildren(
     h("header", {}, h("h1", {}, t("optTitle")), h("span", { id: "saved", class: "ok small" })),
+    h("p", { class: "small" }, t("optHowTo")),
     h(
       "label",
       { class: "line big" },

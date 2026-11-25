@@ -3,12 +3,13 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { chromium, type BrowserContext, type Worker } from "playwright";
+import { chromium, type BrowserContext, type Page, type Worker } from "playwright";
 import type { Settings } from "../src/shared/config.ts";
 import { DEFAULT_SETTINGS } from "../src/shared/config.ts";
 import { startTestServer } from "./test-server.ts";
 
-export const EXTENSION = resolve(import.meta.dirname, "..", "dist", "extension");
+/** The test build (npm run e2e makes it): it may go into a tab without a click on the toolbar. */
+export const EXTENSION = resolve(import.meta.dirname, "..", "dist", "extension-test");
 export const TOKEN = "e2e-token-0123456789abcdef";
 
 export interface Harness {
@@ -20,6 +21,8 @@ export interface Harness {
   /** Tools the test server ran, in order. */
   calls: string[];
   setSettings(s: Partial<Settings>): Promise<void>;
+  /** Turns the bridge on in the page's tab, or off where it is on, as a click on the extension's icon does. */
+  toggle(page: Page): Promise<boolean>;
   close(): Promise<void>;
 }
 
@@ -56,6 +59,12 @@ export async function startHarness(opts: { headless?: boolean; locale?: string }
     dir,
     calls: server.calls,
     setSettings,
+    toggle: (page) =>
+      current().evaluate(async (url) => {
+        const tab = (await chrome.tabs.query({})).find((x) => x.url === url);
+        if (tab?.id === undefined) throw new Error(`no tab at ${url}`);
+        return (globalThis as unknown as { gmbToggleTab(id: number): Promise<boolean> }).gmbToggleTab(tab.id);
+      }, page.url()),
     async close() {
       await context.close();
       server.close();

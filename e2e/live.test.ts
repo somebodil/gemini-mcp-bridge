@@ -27,6 +27,7 @@ describe("real Gemini", { skip: !live && "set GMB_LIVE=1 to run against gemini.g
     await page.goto("https://gemini.google.com/app");
     const editor = page.locator("rich-textarea .ql-editor");
     await editor.waitFor({ timeout: 30_000 });
+    assert.equal(await h.toggle(page), true);
     await page.locator("gmb-status").waitFor({ state: "attached" });
     // the pill shows the tools once the extension reached the server
     await page.waitForFunction(() => document.querySelector("gmb-status")?.shadowRoot?.textContent?.includes("4 tools"), null, { timeout: 15_000 });
@@ -66,6 +67,7 @@ describe("real Gemini, Korean, with approvals", { skip: !live && "set GMB_LIVE=1
     await page.goto("https://gemini.google.com/app");
     const editor = page.locator("rich-textarea .ql-editor");
     await editor.waitFor({ timeout: 30_000 });
+    assert.equal(await h.toggle(page), true);
     await page.waitForFunction(() => document.querySelector("gmb-status")?.shadowRoot?.textContent?.includes("도구 4개"), null, { timeout: 15_000 });
     await editor.click();
     await page.keyboard.type(`내 컴퓨터의 ${h.dir} 폴더에 있는 txt 파일에 적힌 비밀 단어가 뭐야?`);
@@ -92,5 +94,44 @@ describe("real Gemini, Korean, with approvals", { skip: !live && "set GMB_LIVE=1
     assert.ok(clicks >= 1, "at least one call waited for 실행");
     const chips = await page.locator(".gmb-chip").allInnerTexts();
     assert.ok(chips.some((c) => c.includes("MCP Bridge 지침")), chips.join(" | "));
+  });
+});
+
+// The generic mode (for Gemini Enterprise and other pages the extension does not know), tried on the real
+// gemini.google.com: the extension is told not to use what it knows of the page.
+describe("real Gemini in generic mode", { skip: !live && "set GMB_LIVE=1 to run against gemini.google.com" }, () => {
+  let h: Harness;
+  before(async () => {
+    h = await startHarness();
+  });
+  after(async () => {
+    await h?.close();
+  });
+
+  it("finds the word with nothing but the generic page rules", { timeout: 240_000 }, async () => {
+    const word = `otter-${randomBytes(3).toString("hex")}`;
+    writeFileSync(join(h.dir, "note-for-gemini.txt"), `The magic word is ${word}.\n`);
+    await h.setSettings({ policies: { list_directory: "auto", read_file: "auto" } });
+    const page = await h.context.newPage();
+    await page.addInitScript(() => localStorage.setItem("gmb-generic", "1"));
+    await page.goto("https://gemini.google.com/app");
+    const editor = page.locator("rich-textarea .ql-editor");
+    await editor.waitFor({ timeout: 30_000 });
+    assert.equal(await h.toggle(page), true);
+    await page.waitForFunction(() => document.querySelector("gmb-status")?.shadowRoot?.textContent?.includes("4 tools"), null, { timeout: 15_000 });
+    await editor.click();
+    await page.keyboard.type(`What is the magic word in the .txt file in the folder ${h.dir} on my computer?`);
+    await page.keyboard.press("Enter");
+    await page.waitForFunction(
+      (w) => [...document.querySelectorAll("model-response")].some((r) => (r as HTMLElement).innerText.includes(w) && !r.querySelector("code-block")),
+      word,
+      { timeout: 200_000, polling: 1000 },
+    );
+    await page.screenshot({ path: join(process.env.SHOTS ?? h.dir, "live-generic.png"), fullPage: false });
+    const sent = await page.locator("user-query").allInnerTexts();
+    assert.ok(sent.length >= 2, "the extension sent at least one results message");
+    assert.equal(await page.locator(".gmb-chip").count(), 0, "no chips in generic mode");
+    const cards = await page.locator("gmb-card").evaluateAll((els) => els.map((e) => e.shadowRoot?.textContent ?? ""));
+    assert.ok(cards.length >= 1 && cards.some((c) => c.includes("Done")), `cards: ${cards.join(" | ")}`);
   });
 });

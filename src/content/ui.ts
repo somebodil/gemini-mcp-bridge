@@ -1,5 +1,5 @@
-// What the extension draws on Gemini's page: a card under each tool call, a status button in the corner, and
-// chips that stand in for the instruction and result messages. Cards and the button live in shadow roots so
+// What the extension draws on the chat page: a card under each tool call, a status button in the corner, and
+// (on gemini.google.com) chips that stand in for the instruction and result messages. Cards and the button live in shadow roots so
 // that Gemini's styles do not reach them; nothing is built from HTML strings.
 
 import type { BridgeState } from "../shared/config.ts";
@@ -190,7 +190,7 @@ export class Card {
     return this.rows;
   }
 
-  /** Leaves the page for good (another conversation was opened). */
+  /** Leaves the page for good (another conversation was opened, or the bridge was turned off). */
   drop(): void {
     allCards.delete(this);
     this.host.remove();
@@ -207,13 +207,20 @@ export interface Notice {
 }
 
 export interface PillHandlers {
+  /** The page is not gemini.google.com: the panel says so. */
+  generic: boolean;
   onToggleChat(on: boolean): void;
   onRefresh(): void;
   onSettings(): void;
+  onTurnOff(): void;
+  onCopyStructure(): Promise<boolean>;
 }
 
 const PILL_SHEET = sheet(`${BASE_CSS}
 :host { position: fixed; right: 16px; bottom: 16px; z-index: 2147483000; }
+:host([data-down]) .panel, :host([data-down]) .notice { bottom: auto; top: 44px; }
+:host([data-left]) .panel, :host([data-left]) .notice { right: auto; left: 0; }
+.pill { touch-action: none; }
 .pill { display: flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 999px; border: 1px solid var(--line);
   background: var(--bg); color: var(--fg); box-shadow: 0 1px 3px rgba(0,0,0,.2); }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
@@ -233,15 +240,18 @@ interface PillView {
   state: BridgeState | null;
   chatOn: boolean;
   notice: Notice | null;
-  invalid: boolean;
 }
+
+const POS_KEY = "gmb-pill-pos";
 
 export class Pill {
   readonly host: HTMLElement;
   private readonly root: ShadowRoot;
   private open = false;
-  private last: PillView = { state: null, chatOn: true, notice: null, invalid: false };
+  private last: PillView = { state: null, chatOn: true, notice: null };
   private readonly handlers: PillHandlers;
+  /** The button was dragged: the click that ends the drag does not open the panel. */
+  private dragged = false;
 
   constructor(handlers: PillHandlers) {
     this.handlers = handlers;
@@ -249,31 +259,87 @@ export class Pill {
     this.root = this.host.attachShadow({ mode: "open" });
     this.root.adoptedStyleSheets = [PILL_SHEET];
     document.documentElement.append(this.host);
+    this.place(this.saved());
+    this.root.addEventListener("pointerdown", (e) => this.drag(e as PointerEvent));
+  }
+
+  /** Where the user dragged the button to on this site (distance from the right and bottom edges). */
+  private saved(): { right: number; bottom: number } {
+    try {
+      const p = JSON.parse(localStorage.getItem(POS_KEY) ?? "null") as { right?: unknown; bottom?: unknown } | null;
+      if (p && typeof p.right === "number" && typeof p.bottom === "number") return { right: p.right, bottom: p.bottom };
+    } catch {
+      // storage blocked, or not ours
+    }
+    return { right: 16, bottom: 16 };
+  }
+
+  private place(p: { right: number; bottom: number }): { right: number; bottom: number } {
+    const right = Math.round(Math.min(Math.max(p.right, 0), Math.max(0, innerWidth - 80)));
+    const bottom = Math.round(Math.min(Math.max(p.bottom, 0), Math.max(0, innerHeight - 40)));
+    this.host.style.right = `${right}px`;
+    this.host.style.bottom = `${bottom}px`;
+    // the panel opens to where there is room
+    this.host.toggleAttribute("data-down", bottom > innerHeight / 2);
+    this.host.toggleAttribute("data-left", right > innerWidth / 2);
+    return { right, bottom };
+  }
+
+  /** The button can be dragged away from what it covers on a page; the place is kept per site. */
+  private drag(down: PointerEvent): void {
+    if (!down.isTrusted || down.button !== 0 || !(down.target instanceof Element) || !down.target.closest(".pill")) return;
+    const start = this.saved();
+    const from = { right: parseFloat(this.host.style.right) || start.right, bottom: parseFloat(this.host.style.bottom) || start.bottom };
+    let at = from;
+    this.dragged = false;
+    const move = (e: PointerEvent) => {
+      const dx = e.clientX - down.clientX;
+      const dy = e.clientY - down.clientY;
+      if (!this.dragged && Math.hypot(dx, dy) < 5) return;
+      this.dragged = true;
+      at = this.place({ right: from.right - dx, bottom: from.bottom - dy });
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move, true);
+      window.removeEventListener("pointerup", up, true);
+      window.removeEventListener("pointercancel", up, true);
+      if (!this.dragged) return;
+      try {
+        localStorage.setItem(POS_KEY, JSON.stringify(at));
+      } catch {
+        // storage blocked: the place holds until the page is left
+      }
+    };
+    window.addEventListener("pointermove", move, true);
+    window.addEventListener("pointerup", up, true);
+    window.addEventListener("pointercancel", up, true);
   }
 
   render(view: PillView): void {
     this.last = view;
     if (!this.host.isConnected) document.documentElement.append(this.host);
     this.host.toggleAttribute("data-dark", dark);
-    const { state, chatOn, notice, invalid } = view;
+    const { state, chatOn, notice } = view;
     const live = state?.servers.filter((s) => s.status === "ok") ?? [];
     const failed = state?.servers.some((s) => s.status === "error") ?? false;
     let dot = "";
     let label = "MCP";
-    if (invalid) dot = "err";
-    else if (!state || !state.enabled) label = "MCP · " + t("statusOff");
+    if (!state || !state.enabled) label = "MCP · " + t("statusOff");
     else {
       dot = notice ? "warn" : live.length && chatOn ? "ok" : failed ? "err" : "";
       label = `MCP · ${t("tools", { n: state.tools.length })}`;
     }
     const pill = h("button", { class: "pill", title: "Gemini MCP Bridge" }, h("span", { class: `dot ${dot}` }), label);
     onTrustedClick(pill, () => {
+      if (this.dragged) {
+        this.dragged = false;
+        return;
+      }
       this.open = !this.open;
       this.render(this.last);
     });
     const children: Node[] = [pill];
-    if (invalid) children.push(h("div", { class: "notice" }, t("reloadPage")));
-    else if (notice && !this.open) children.push(this.noticeBox(notice));
+    if (notice && !this.open) children.push(this.noticeBox(notice));
     else if (this.open) children.push(this.panel(state, chatOn));
     this.root.replaceChildren(...children);
   }
@@ -314,11 +380,21 @@ export class Pill {
       }
       if (!state.servers.some((s) => s.status === "ok")) panel.append(h("div", { class: "small muted" }, t("noServer")));
     }
+    if (this.handlers.generic) panel.append(h("div", { class: "small muted" }, t("genericPage")));
     const refresh = h("button", {}, t("refresh"));
     onTrustedClick(refresh, () => this.handlers.onRefresh());
     const settings = h("button", {}, t("settings"));
     onTrustedClick(settings, () => this.handlers.onSettings());
-    panel.append(h("div", { class: "buttons" }, refresh, settings));
+    const off = h("button", {}, t("turnOffTab"));
+    onTrustedClick(off, () => this.handlers.onTurnOff());
+    const copy = h("button", {}, t("copyStructure"));
+    onTrustedClick(copy, () => {
+      void this.handlers.onCopyStructure().then((ok) => {
+        copy.textContent = ok ? `✓ ${t("copied")}` : t("copyFailed");
+        setTimeout(() => (copy.textContent = t("copyStructure")), 2500);
+      });
+    });
+    panel.append(h("div", { class: "buttons" }, refresh, settings, off), h("div", { class: "buttons" }, copy));
     return panel;
   }
 }
@@ -336,6 +412,10 @@ const PAGE_CSS = `
 export function installPageStyle(): void {
   if (document.getElementById("gmb-page-style")) return;
   (document.head ?? document.documentElement).append(h("style", { id: "gmb-page-style" }, PAGE_CSS));
+}
+
+export function removePageStyle(): void {
+  document.getElementById("gmb-page-style")?.remove();
 }
 
 /**

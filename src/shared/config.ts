@@ -131,7 +131,12 @@ export interface BridgeState {
   behavior: Behavior;
 }
 
-export type Request = { type: "getState"; refresh?: boolean } | { type: "setPolicy"; tool: string; policy: Policy } | { type: "openOptions" };
+export type Request =
+  | { type: "getState"; refresh?: boolean }
+  | { type: "setPolicy"; tool: string; policy: Policy }
+  | { type: "openOptions" }
+  /** From the page script: turn the bridge off in its own tab. */
+  | { type: "turnOff" };
 
 /** `approved`: the user pressed Run for this very call. The service worker runs an "ask" tool only then. */
 export type PortRequest = { type: "call"; tool: string; arguments: Record<string, unknown>; approved: boolean } | { type: "ping" };

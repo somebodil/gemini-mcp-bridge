@@ -17,7 +17,11 @@ const en = {
   sendResults: "Send results",
   resultsInBox: "Tool results are in the input box: press send.",
   sendFailed: "Could not send the results to Gemini. They are in the input box.",
-  reloadPage: "The extension was updated: reload this page.",
+  turnOffTab: "Turn off in this tab",
+  copyStructure: "Copy page structure",
+  copied: "Copied",
+  copyFailed: "Could not copy",
+  genericPage: "Generic mode: this page is not gemini.google.com, so the extension finds the input box, the send button and the code blocks by itself.",
   askCall: "Allow this call?",
   run: "Run",
   alwaysAllow: "Always allow",
@@ -37,6 +41,8 @@ const en = {
   chipResults: "Tool results: {s}",
   // options page
   optTitle: "Gemini MCP Bridge",
+  optHowTo:
+    "To use it, open your chat page (gemini.google.com, Gemini Enterprise, or another chat site) and click the extension's icon in Chrome's toolbar: it works in that tab only, and the icon shows ON there. Another click turns it off. This page: right-click the icon, then Options.",
   optEnabled: "Turn on MCP Bridge",
   optServers: "MCP servers",
   optServersHelp:
@@ -81,7 +87,11 @@ const ko: Record<Key, string> = {
   sendResults: "결과 보내기",
   resultsInBox: "도구 결과를 입력창에 넣었습니다. 보내기를 누르세요.",
   sendFailed: "결과를 Gemini에 보내지 못했습니다. 입력창에 있습니다.",
-  reloadPage: "확장이 업데이트됐습니다. 페이지를 새로고침하세요.",
+  turnOffTab: "이 탭에서 끄기",
+  copyStructure: "페이지 구조 복사",
+  copied: "복사했습니다",
+  copyFailed: "복사하지 못했습니다",
+  genericPage: "범용 모드: gemini.google.com이 아닌 페이지라서, 확장이 입력창과 보내기 버튼, 코드 블록을 스스로 찾습니다.",
   askCall: "이 호출을 실행할까요?",
   run: "실행",
   alwaysAllow: "항상 허용",
@@ -100,6 +110,8 @@ const ko: Record<Key, string> = {
   chipUpdate: "MCP Bridge 도구 목록 갱신",
   chipResults: "도구 결과: {s}",
   optTitle: "Gemini MCP Bridge",
+  optHowTo:
+    "쓰려면 채팅 페이지(gemini.google.com, Gemini Enterprise, 다른 채팅 사이트)를 열고 Chrome 툴바의 확장 아이콘을 누르세요. 그 탭에서만 동작하고, 그 탭의 아이콘에 ON이 표시됩니다. 한 번 더 누르면 꺼집니다. 이 설정 페이지: 아이콘을 오른쪽 클릭한 뒤 옵션.",
   optEnabled: "MCP Bridge 켜기",
   optServers: "MCP 서버",
   optServersHelp:

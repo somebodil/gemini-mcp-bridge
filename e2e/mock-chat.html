@@ -1,0 +1,159 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Mock chat</title>
+    <style>
+      body { font: 14px sans-serif; margin: 0; background: #fff; }
+    </style>
+  </head>
+  <body>
+    <chat-app></chat-app>
+    <script>
+      // A chat page unlike gemini.google.com, for the generic mode: a web component that keeps everything in shadow
+      // roots, a textarea, an icon button (with a closed shadow root) that sends and turns into a stop button while
+      // the reply is written, the user's messages shown as markdown (code blocks too), replies written out bit by
+      // bit, and the whole list drawn anew on every change, as some frameworks do.
+      window.__sent = [];
+      window.__replies = window.__replies || [];
+      window.__initial = window.__initial || [];
+
+      customElements.define(
+        "icon-button",
+        class extends HTMLElement {
+          constructor() {
+            super();
+            this.root = this.attachShadow({ mode: "closed" });
+            this.root.innerHTML = '<button><span class="icon"></span></button>';
+          }
+          set icon(v) {
+            this.root.querySelector(".icon").textContent = v;
+          }
+        },
+      );
+
+      function bubble(m) {
+        const d = document.createElement("div");
+        d.className = `msg ${m.role}`;
+        // a block still being written has no closing fence yet
+        m.text.split(/```[a-z]*\n([\s\S]*?)(?:```|$)/).forEach((part, i) => {
+          if (i % 2) {
+            const pre = document.createElement("pre");
+            const code = document.createElement("code");
+            code.textContent = part;
+            pre.append(code);
+            d.append(pre);
+          } else if (part.trim()) {
+            const p = document.createElement("p");
+            p.textContent = part.trim();
+            d.append(p);
+          }
+        });
+        return d;
+      }
+
+      customElements.define(
+        "chat-app",
+        class extends HTMLElement {
+          constructor() {
+            super();
+            const r = this.attachShadow({ mode: "open" });
+            r.innerHTML = `<style>
+              .log { padding: 16px 16px 120px; } .msg { margin: 12px 0; } .user { text-align: right; }
+              pre { background: #111; color: #eee; padding: 8px; text-align: left; white-space: pre-wrap; }
+              .bar { position: fixed; left: 16px; right: 180px; bottom: 16px; display: flex; gap: 8px; }
+              textarea { flex: 1; min-height: 40px; }
+            </style><div class="log"></div><div class="bar"><textarea aria-label="Message"></textarea><icon-button></icon-button></div>`;
+            this.log = r.querySelector(".log");
+            this.box = r.querySelector("textarea");
+            this.btn = r.querySelector("icon-button");
+            this.messages = window.__initial.map((m) => ({ ...m }));
+            this.generating = false;
+            this.box.addEventListener("keydown", (e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                this.send();
+              }
+            });
+            this.btn.addEventListener("click", () => (this.generating ? this.stop() : this.send()));
+            this.setButton();
+            this.draw();
+          }
+          setButton() {
+            this.btn.setAttribute("aria-label", this.generating ? "Stop" : "Send");
+            this.btn.icon = this.generating ? "stop" : "send";
+          }
+          draw() {
+            this.log.replaceChildren(...this.messages.map(bubble));
+          }
+          send() {
+            const text = this.box.value.trim();
+            if (!text || this.generating) return;
+            window.__sent.push(text);
+            this.box.value = "";
+            this.messages.push({ role: "user", text });
+            const reply = window.__replies.shift() ?? "Nothing more to say.";
+            const m = { role: "model", text: "" };
+            this.messages.push(m);
+            this.generating = true;
+            this.setButton();
+            this.draw();
+            const steps = window.__steps ?? 4;
+            const gen = (this.gen = {});
+            let i = 0;
+            const step = () => {
+              if (this.gen !== gen || !this.generating) return;
+              i++;
+              m.text = reply.slice(0, Math.ceil((reply.length * i) / steps));
+              // like gemini.google.com: a new chat gets its address only when the answer is (nearly) written
+              const address = () => {
+                if (!location.pathname.startsWith("/c/")) history.pushState({}, "", "/c/1234");
+              };
+              if (window.__blocksAtEnd && i === steps) {
+                // like gemini.google.com: the stop button goes first, the code blocks come a moment later
+                this.generating = false;
+                this.setButton();
+                setTimeout(() => {
+                  this.draw();
+                  setTimeout(address, 500);
+                }, 600);
+                return;
+              }
+              if (window.__blocksAtEnd) m.text = m.text.replace(/```[\s\S]*?(```|$)/g, "");
+              this.draw();
+              if (i < steps) setTimeout(step, window.__stepMs ?? 150);
+              else
+                setTimeout(() => {
+                  address();
+                  this.generating = false;
+                  this.setButton();
+                }, 500);
+            };
+            setTimeout(step, window.__stepMs ?? 150);
+          }
+          stop() {
+            this.generating = false;
+            this.setButton();
+          }
+          // a new chat at the same address
+          newChat() {
+            this.gen = null;
+            this.stop();
+            this.messages = [];
+            this.draw();
+          }
+          openOld(messages) {
+            this.gen = null;
+            this.stop();
+            history.pushState({}, "", "/c/9999");
+            this.messages = messages.map((m) => ({ ...m }));
+            this.draw();
+          }
+        },
+      );
+      const app = document.querySelector("chat-app");
+      window.__newChat = () => app.newChat();
+      window.__openOld = (m) => app.openOld(m);
+    </script>
+  </body>
+</html>

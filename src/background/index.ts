@@ -1,5 +1,5 @@
-// The service worker: keeps the connections to the MCP servers and runs the calls the page asks for.
-// The page (content script) cannot reach 127.0.0.1 itself: Gemini's page rules apply to it.
+// The service worker: keeps the connections to the MCP servers, runs the calls the page asks for, and turns the
+// bridge on and off per tab. The page script cannot reach 127.0.0.1 itself: the page's own rules apply to it.
 
 import type { BridgeState, CallReply, PortRequest, Request, ServerConfig, ServerState, Settings } from "../shared/config.ts";
 import { loadSettings, updateSettings } from "../shared/config.ts";
@@ -133,7 +133,98 @@ async function callTool(name: string, args: Record<string, unknown>, approved: b
   }
 }
 
-chrome.runtime.onMessage.addListener((msg: Request, _sender, sendResponse) => {
+// ---------------------------------------------------------------------------------------------------------
+// Turning the bridge on and off per tab. A click on the extension's icon gives the extension that one tab
+// (activeTab), and the page script goes in there; another click takes it out. The tab stays on through
+// reloads on the same site; another site, or closing the tab, ends it.
+
+const ACTIVE_KEY = "activeTabs";
+
+/** Tabs with the bridge on, and the site (origin) it was turned on for. */
+async function activeTabs(): Promise<Record<string, string>> {
+  return ((await chrome.storage.session.get(ACTIVE_KEY))[ACTIVE_KEY] as Record<string, string> | undefined) ?? {};
+}
+
+async function mark(tabId: number, origin: string | null): Promise<void> {
+  const tabs = await activeTabs();
+  if (origin) tabs[tabId] = origin;
+  else delete tabs[tabId];
+  await chrome.storage.session.set({ [ACTIVE_KEY]: tabs });
+  await chrome.action.setBadgeText({ tabId, text: origin ? "ON" : "" }).catch(() => undefined);
+  if (origin) await chrome.action.setBadgeBackgroundColor({ tabId, color: "#188038" }).catch(() => undefined);
+}
+
+/** The page script is running in the tab. */
+async function running(tabId: number): Promise<boolean> {
+  try {
+    return (await chrome.tabs.sendMessage(tabId, { type: "ping" })) === "pong";
+  } catch {
+    return false;
+  }
+}
+
+/** Puts the page script into the tab, when the tab shows `origin` (any site when not given); returns the site. */
+async function inject(tabId: number, origin?: string): Promise<string> {
+  const [r] = await chrome.scripting.executeScript({ target: { tabId }, func: () => location.origin });
+  const site = String(r?.result ?? "");
+  if (origin !== undefined && site !== origin) throw new Error(`the tab shows another site (${site})`);
+  await chrome.scripting.executeScript({ target: { tabId }, files: ["content.js"] });
+  return site;
+}
+
+async function turnOff(tabId: number): Promise<void> {
+  await chrome.tabs.sendMessage(tabId, { type: "deactivate" }).catch(() => undefined);
+  await mark(tabId, null);
+}
+
+/** On where it is off, off where it is on; returns the new state. */
+async function toggleTab(tabId: number): Promise<boolean> {
+  if (await running(tabId)) {
+    await turnOff(tabId);
+    return false;
+  }
+  await mark(tabId, await inject(tabId));
+  return true;
+}
+
+// the tests turn tabs on this way (they cannot click the toolbar)
+(globalThis as { gmbToggleTab?: typeof toggleTab }).gmbToggleTab = toggleTab;
+
+chrome.action.onClicked.addListener((tab) => {
+  if (tab.id !== undefined) void toggleTab(tab.id).catch((e: unknown) => console.warn("MCP Bridge could not start in this tab:", e));
+});
+
+// a page that loaded anew has lost the script: on the same site it goes in again
+chrome.tabs.onUpdated.addListener((tabId, info) => {
+  if (info.status !== "complete") return;
+  void (async () => {
+    const origin = (await activeTabs())[tabId];
+    if (!origin) return;
+    if (await running(tabId)) {
+      // the page changed its address only (a chat app does that): the script is still there
+      await chrome.action.setBadgeText({ tabId, text: "ON" }).catch(() => undefined);
+      return;
+    }
+    try {
+      await mark(tabId, await inject(tabId, origin));
+    } catch {
+      await mark(tabId, null);
+    }
+  })();
+});
+chrome.tabs.onRemoved.addListener((tabId) => {
+  void activeTabs().then((tabs) => {
+    if (!(tabId in tabs)) return;
+    delete tabs[tabId];
+    return chrome.storage.session.set({ [ACTIVE_KEY]: tabs });
+  });
+});
+
+chrome.runtime.onMessage.addListener((msg: Request, sender, sendResponse) => {
+  if (msg.type === "turnOff") {
+    if (sender.tab?.id !== undefined) void turnOff(sender.tab.id);
+    return false;
+  }
   if (msg.type === "getState") {
     getState(msg.refresh === true).then(sendResponse, (e: unknown) => sendResponse({ error: String(e) }));
     return true;
@@ -169,8 +260,6 @@ chrome.runtime.onConnect.addListener((port) => {
     callTool(msg.tool, msg.arguments ?? {}, msg.approved === true, ctrl.signal).then(send, (e: unknown) => send({ ok: false, text: `The extension failed: ${String(e)}`, durationMs: 0 }));
   });
 });
-
-chrome.action.onClicked.addListener(() => void chrome.runtime.openOptionsPage());
 
 chrome.runtime.onInstalled.addListener((details) => {
   if (details.reason === "install") void chrome.runtime.openOptionsPage();

@@ -1,6 +1,8 @@
 # Gemini MCP Bridge
 
-Gemini on the web ([gemini.google.com](https://gemini.google.com)) gets the tools of your own computer: your shell, your files, and any MCP server you run. You chat as usual; when Gemini needs your computer, it calls a tool, and the answer comes back by itself.
+Gemini on the web ([gemini.google.com](https://gemini.google.com), and [Gemini Enterprise](#other-chat-pages-gemini-enterprise-and-others) or other chat pages) gets the tools of your own computer: your shell, your files, and any MCP server you run. You chat as usual; when Gemini needs your computer, it calls a tool, and the answer comes back by itself.
+
+It works only in the tabs where you turn it on: click its icon in Chrome's toolbar.
 
 This is the Chrome extension. It works with a local MCP server, because an extension cannot touch your computer by itself:
 
@@ -11,6 +13,7 @@ This is the Chrome extension. It works with a local MCP server, because an exten
 
 Gemini on the web has no API for outside tools, so the extension works through the chat itself:
 
+0. You click the extension's icon in the tab where you chat. The extension goes into that tab only (the icon shows **ON** there); another click takes it out.
 1. When you send the first message of a conversation, the extension puts instructions and the list of your tools in front of it. On the page they collapse into a chip: `🔧 MCP Bridge instructions · 4 tools`.
 2. When Gemini needs a tool, it answers with a code block like this one, and stops:
 
@@ -72,11 +75,11 @@ More about the server: [gemini-mcp-bridge-server](https://github.com/somebodil/g
 4. Turn on **Developer mode** (the switch at the top right).
 5. Click **Load unpacked** (top left) and choose the folder from step 2: the one that holds `manifest.json`.
 6. *Gemini MCP Bridge* appears in the list, and its options page opens.
-7. Optional: click the puzzle icon in Chrome's toolbar and pin *Gemini MCP Bridge*, so that its icon is always there.
+7. Click the puzzle icon in Chrome's toolbar and pin *Gemini MCP Bridge*: you turn it on with its icon.
 
 ### 3. Connect the extension to the server
 
-On the options page (later: click the extension's icon in Chrome's toolbar):
+On the options page (later: right-click the extension's icon, then **Options**; or **Settings** in the corner button):
 
 1. Leave the URL as it is (`http://127.0.0.1:7341/mcp`), unless you started the server with another port.
 2. Paste the token the server printed. Lost it? Run `gemini-mcp-bridge-server token` (or `npx gemini-mcp-bridge-server token`).
@@ -86,12 +89,24 @@ On the options page (later: click the extension's icon in Chrome's toolbar):
 
 ### 4. Use it
 
-Open [Gemini](https://gemini.google.com/app), start a new chat, and ask something that needs your computer, for example *"What are the largest files in my Downloads folder?"*.
+Open [Gemini](https://gemini.google.com/app) and click the extension's icon: **ON** appears on it, and a button in the lower right corner of the page. Start a new chat, and ask something that needs your computer, for example *"What are the largest files in my Downloads folder?"*.
 
-- The button in the lower right corner of the page shows the state (*MCP · 4 tools*). Click it to see the servers, or to turn the tools off for this chat.
+- The button in the corner shows the state (*MCP · 4 tools*). Click it to see the servers, to turn the tools off for this chat, or to turn the extension off in this tab. Drag it elsewhere if it covers something; it keeps the place for the site.
+- The extension stays on in the tab when you reload the page. It goes off when you click the icon again, when the tab goes to another site, or when you close the tab. Other tabs are not touched.
 - Each call gets a card under it. Press **Run** to run it, **Always allow** to let that tool run without asking from now on, or **Deny**.
 
 ![A call waiting for Run](store/images/screenshot-1-ask.png)
+
+### Other chat pages (Gemini Enterprise and others)
+
+On a page other than gemini.google.com, for example Gemini Enterprise (`vertexaisearch.cloud.google.com`), the extension runs in **generic mode**: it does not know the page, so it finds what it needs by itself.
+
+- The input box is the box you type in. The send and stop buttons are found by their names (*Send*, *Submit*, *Stop*, *보내기*, *중지*).
+- A tool call is a code block that appears after your message went out (also inside web components). Blocks that were on the page before, or that are part of your own message, never run.
+- The instructions are sent again when they are not on the page, for example in a new chat at the same address.
+- There are no chips: the instructions and results stay visible as Gemini shows them.
+
+If it does not work on a page (nothing is sent, or a call is not seen), click the corner button, then **Copy page structure**, and paste it into an [issue](https://github.com/somebodil/gemini-mcp-bridge/issues). It holds the page's element names, classes and labels, and the length of texts, but none of the texts themselves. Look it over before you post it: labels can hold the titles of your chats.
 
 ## Update
 
@@ -100,7 +115,7 @@ A new version does not install itself:
 1. Download the new zip from the [latest release](https://github.com/somebodil/gemini-mcp-bridge/releases/latest).
 2. Unzip it over the same folder (replace the files).
 3. In `chrome://extensions`, press the reload button (the round arrow) on *Gemini MCP Bridge*.
-4. Reload the Gemini tabs that are open.
+4. Click the icon again in the tabs where you use it (an update turns the extension off in all tabs).
 
 Your settings stay. The server updates the same way it was installed: `npx` takes the latest version by itself; after `npm install -g`, run it again.
 
@@ -116,8 +131,10 @@ Your settings stay. The server updates the same way it was installed: `npx` take
 | *Cannot reach http://127.0.0.1:7341/mcp ... Is the local server running?* | Start the server (step 1), then press **Test** or **Refresh**. |
 | *HTTP 401 ... Check the token* | The token in the options does not match the server's: paste it again (`gemini-mcp-bridge-server token`). |
 | *Only 127.0.0.1 and localhost addresses can be reached* | The extension talks only to servers on your own computer. |
-| The corner button says *The extension was updated: reload this page* | Reload the Gemini tab. |
-| Gemini says it cannot access your computer | Start a new chat: the instructions go with the first message of a chat. Check that the corner button shows tools, and not *Off*. |
+| No corner button on the page | The extension is off in this tab: click its icon (it shows **ON** when on). After an update of the extension, every tab starts off. |
+| The icon does nothing on a page | Chrome does not let extensions into some pages (`chrome://` pages, the Chrome Web Store). |
+| On a page other than gemini.google.com, nothing happens | See [Other chat pages](#other-chat-pages-gemini-enterprise-and-others): copy the page structure and open an issue. |
+| Gemini says it cannot access your computer | Start a new chat: the instructions go with the first message of a chat. Check that the corner button is there and shows tools, and not *Off*. |
 | Gemini writes a call, but nothing happens | Look at the card under it: it may be waiting for **Run**. A call in a chat opened from the history never runs: only replies written while the page is open do. |
 | The extension disappeared after Chrome restarted | Its folder was moved or deleted: unzip it again and **Load unpacked** again. |
 
@@ -125,6 +142,7 @@ Your settings stay. The server updates the same way it was installed: `npx` take
 
 Read this before you allow a tool to run by itself.
 
+- **Only where you turn it on.** The extension can see a page only after you click its icon in that tab (Chrome's *activeTab*). It has no access to any site by itself.
 - **Calls wait for you.** By default every call waits for your **Run**. *Always allow* (or *Auto* on the options page) lets one tool run without asking; there is no switch that lets every tool run.
 - **Gemini's text is not trustworthy.** A web page, a document or an email that Gemini reads can carry instructions of its own ("prompt injection"). Keep tools that run commands or write files on **Ask** unless you watch closely.
 - **Old conversations never run calls.** A reply is handled only if this tab saw Gemini write it. Opening an old chat, reloading the page or switching chats runs nothing.
@@ -144,10 +162,11 @@ Read this before you allow a tool to run by itself.
 
 ## Limits
 
-- The extension reads and writes Gemini's page, which Google can change at any time. When Gemini changes its page, the extension may stop working until it is updated. All of what it relies on is in [`src/content/gemini.ts`](src/content/gemini.ts).
+- The extension reads and writes Gemini's page, which Google can change at any time. When Gemini changes its page, the extension may stop working until it is updated. All of what it relies on is in [`src/content/gemini.ts`](src/content/gemini.ts); for other pages, in [`src/content/generic.ts`](src/content/generic.ts).
+- Generic mode guesses. A page whose send button has no name, or that shows code blocks in something other than `<pre>` or `<code>`, needs the page structure to be supported.
 - Gemini follows the protocol well, but it is a protocol in text: now and then Gemini writes a call in the wrong shape, or forgets the instructions in a very long conversation. A call it cannot read gets an error back, so that Gemini can write it again. When the tool list changes, the next message carries the new list.
 - Images, audio and other binary output of tools reach Gemini only as a short note (`[image: image/png, 120 KB, not shown]`).
-- Only Chrome, and only gemini.google.com.
+- Only Chrome. Only the top frame of a page (not a chat inside an iframe).
 
 ## Privacy
 
@@ -159,12 +178,12 @@ The extension sends nothing to its developer or to anyone else: see [PRIVACY.md]
 npm install
 npm run check     # types, lint, unit tests (the MCP client against servers made with the official SDK)
 npm run build     # dist/extension: load it with "Load unpacked"
-npm run e2e       # the built extension in Chromium against a mock of Gemini's page
+npm run e2e       # a test build in Chromium against a mock of Gemini's page and a mock of another chat page
 npm run e2e:live  # against the real gemini.google.com, signed out
 node e2e/obey.ts  # how often each Gemini model follows the instructions (after changing their wording)
 ```
 
-With `localStorage["gmb-debug"] = "1"` on gemini.google.com, the extension writes its steps to the console.
+With `localStorage["gmb-debug"] = "1"` on the page, the extension writes its steps to the console. With `localStorage["gmb-generic"] = "1"`, it uses generic mode on gemini.google.com too.
 
 A release: set the version in `package.json` (the build writes it into the manifest), then push a tag with that version. The workflow builds the zip, attests it, and creates the release.
 

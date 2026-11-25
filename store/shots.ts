@@ -1,5 +1,5 @@
 // Makes the Chrome Web Store screenshots (1280×800) from a real session on gemini.google.com, signed out, and
-// the small promo tile (440×280). Run after `npm run build`: node store/shots.ts
+// the small promo tile (440×280). Run after `node scripts/build.mjs --test`: node store/shots.ts
 
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -22,6 +22,7 @@ try {
   await page.goto("https://gemini.google.com/app");
   const editor = page.locator("rich-textarea .ql-editor");
   await editor.waitFor({ timeout: 30_000 });
+  await h.toggle(page);
   await page.waitForFunction(() => document.querySelector("gmb-status")?.shadowRoot?.textContent?.includes("4 tools"), null, { timeout: 15_000 });
   await editor.click();
   await page.keyboard.type(`What's on my to-do list? It's a file in ${DEMO}`);
