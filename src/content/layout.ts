@@ -10,7 +10,7 @@
 // the page writes).
 
 import { LAYOUTS_KEY, loadLayouts, storeLayout, type Layout, type Locator, type Pattern } from "../shared/layouts.ts";
-import { deepElements, isOurs, nameOf, parentOf, shadowOf } from "./page.ts";
+import { deepElements, isOurs, nameOf, parentOf, shadowOf, treesUnder } from "./page.ts";
 
 export { ROLES, type Layout, type Locator, type Pattern, type Role } from "../shared/layouts.ts";
 
@@ -160,7 +160,6 @@ export function resolve(loc: Locator | undefined): Element | null {
   return el;
 }
 
-export const sameLocator = (a: Locator | undefined, b: Locator | undefined) => !!a && !!b && a.join("\u0000") === b.join("\u0000");
 
 // ---------------------------------------------------------------------------------------------------------
 // Patterns
@@ -197,18 +196,11 @@ export function patternOf(example: Element, avoid: Element[]): Pattern | null {
 }
 
 /** The elements of a kind under `root` (shadow roots included), only the outermost of nested matches. */
-export function findAll(pattern: Pattern | undefined, root: Element | Document, limit = 500): Element[] {
+export function findAll(pattern: Pattern | undefined, root: Element | Document): Element[] {
   if (!pattern) return [];
   const out: Element[] = [];
-  let outer: Element | null = null;
-  for (const el of deepElements(root)) {
-    if (outer && contains(outer, el)) continue;
-    if (matchesPattern(el, pattern)) {
-      out.push(el);
-      outer = el;
-      if (out.length >= limit) break;
-    }
-  }
+  // the outermost ones only: nothing under one found is looked at
+  for (const el of deepElements(root, undefined, (e) => e === out.at(-1))) if (matchesPattern(el, pattern)) out.push(el);
   return out;
 }
 
@@ -279,14 +271,9 @@ export const letters = (s: string) => s.replace(/[^\p{L}\p{N}]+/gu, "");
 /** Text nodes under `root` (shadow roots included) whose text holds `needle`. */
 export function textNodesWith(root: Element, needle: string): Text[] {
   const out: Text[] = [];
-  const scan = (tree: Element | ShadowRoot) => {
+  for (const tree of treesUnder(root)) {
     const walker = document.createTreeWalker(tree, NodeFilter.SHOW_TEXT);
     for (let n = walker.nextNode(); n; n = walker.nextNode()) if ((n as Text).data.includes(needle)) out.push(n as Text);
-  };
-  scan(root);
-  for (const el of deepElements(root)) {
-    const sr = shadowOf(el);
-    if (sr) scan(sr);
   }
   return out;
 }

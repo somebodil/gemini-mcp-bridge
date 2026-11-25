@@ -3,9 +3,10 @@
 // with its name, ↑ goes one layer out, ↓ one layer back in, a click or Enter picks, Esc cancels. The wheel
 // still scrolls what is under the pointer.
 
+import { SHADOW_MODE } from "../shared/dom.ts";
 import type { Role } from "./layout.ts";
 import { ROLE_COLOR, roleName } from "./overlay.ts";
-import { deepElements, describe, elementAtByBox, isOurs, parentOf, shadowOf } from "./page.ts";
+import { deepElements, elementAtByBox, isOurs, parentOf, shadowOf, short } from "./page.ts";
 
 const SHEET = new CSSStyleSheet();
 SHEET.replaceSync(`
@@ -60,7 +61,7 @@ export class Picker {
     this.onChange = onChange;
     this.onDone = onDone;
     this.host = document.createElement("gmb-picker");
-    this.root = this.host.attachShadow({ mode: "open" });
+    this.root = this.host.attachShadow({ mode: SHADOW_MODE });
     this.root.adoptedStyleSheets = [SHEET];
     document.documentElement.append(this.host);
     for (const type of ["pointerdown", "pointerup", "mousedown", "mouseup", "click", "dblclick", "contextmenu", "auxclick"]) {
@@ -73,10 +74,6 @@ export class Picker {
   }
 
   /** What is outlined now. */
-  get element(): Element | null {
-    return this.current;
-  }
-
   /** Nothing of a click reaches the page; the click itself picks. */
   private readonly swallow = (e: Event) => {
     e.preventDefault();
@@ -147,7 +144,7 @@ export class Picker {
     box.style.cssText = `--c:${ROLE_COLOR[this.role]};left:${r.left}px;top:${r.top}px;width:${r.width}px;height:${r.height}px`;
     const tag = document.createElement("span");
     tag.className = "tag";
-    tag.textContent = `${roleName(this.role)} · ${describe(el).slice(0, 80)}`;
+    tag.textContent = `${roleName(this.role)} · ${short(el)}`;
     box.append(tag);
     this.root.replaceChildren(box);
   }

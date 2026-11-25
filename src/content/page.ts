@@ -84,16 +84,20 @@ export interface Page {
 /** Where the page's input box and send button are, with what holds both (the box the user types in). */
 export function inputAreaRects(els: Element[]): DOMRect[] {
   const out = els.map((e) => e.getBoundingClientRect()).filter((r) => r.width && r.height);
-  const ed = els[0];
-  if (!ed) return out;
+  const r = els[0] ? composerRect(els[0]) : null;
+  if (r?.width && r.height) out.push(r);
+  return out;
+}
+
+/** The box around the input box `ed` with its buttons: its largest ancestor not much taller than it, not page-wide. */
+export function composerRect(ed: Element): DOMRect {
   let r = ed.getBoundingClientRect();
   for (let el = parentOf(ed), i = 0; el && i < 8; el = parentOf(el), i++) {
     const b = el.getBoundingClientRect();
     if (b.height > Math.max(r.height + 150, 220) || b.width > innerWidth * 0.95) break;
     r = b;
   }
-  if (r.width && r.height) out.push(r);
-  return out;
+  return r;
 }
 
 /** With localStorage["gmb-debug"] = "1" on the page, the steps go to the console. */
@@ -108,36 +112,116 @@ export function dbg(...args: unknown[]): void {
 /** The extension's own elements (cards, the status button): never part of the page's content. */
 export const isOurs = (el: Element) => el.localName.startsWith("gmb-");
 
+/** The browser's elements a page may attach a shadow root to; the others keep the browser's own to themselves. */
+const HOSTS = new Set(["article", "aside", "blockquote", "body", "div", "footer", "h1", "h2", "h3", "h4", "h5", "h6", "header", "main", "nav", "p", "section", "span"]);
+/** Elements of the browser's that hold no shadow root: a page attaches one right after making the element, if at all. */
+const noShadow = new WeakSet<Element>();
+
 /**
- * The shadow root of a web component, also a closed one (an extension may look into those). Only custom elements
- * (with a "-" in the name): the browser's own elements keep theirs to themselves.
+ * The shadow root of an element, also a closed one (an extension may look into those): of a custom element (with
+ * a "-" in the name), or of one of the browser's elements a page may attach one to (a closed root on a <div>).
  */
 export function shadowOf(el: Element): ShadowRoot | null {
   if (el.shadowRoot) return el.shadowRoot;
-  if (!el.localName.includes("-") || !(el instanceof HTMLElement) || isOurs(el)) return null;
+  if (!(el instanceof HTMLElement) || isOurs(el) || noShadow.has(el)) return null;
+  const custom = el.localName.includes("-");
+  if (!custom && !HOSTS.has(el.localName)) return null;
   try {
-    return chrome.dom?.openOrClosedShadowRoot(el) ?? null;
+    const sr = chrome.dom?.openOrClosedShadowRoot(el) ?? null;
+    // a custom element may get its root when it is defined, later
+    if (!sr && !custom) noShadow.add(el);
+    return sr;
   } catch {
     return null;
   }
 }
 
+const MONO = /mono|courier|consolas|menlo|monaco|code/i;
+
+/** Drawn in a monospace font: code. */
+export function isMonospace(el: Element): boolean {
+  return MONO.test(getComputedStyle(el).fontFamily);
+}
+
+const SKIP_TEXT = new Set(["script", "style", "noscript", "template"]);
+const BLOCK = new Set(["div", "p", "li", "tr", "pre", "section", "article", "table", "ul", "ol", "h1", "h2", "h3", "h4", "h5", "h6"]);
+
+/** A line number drawn in a code block: digits only, and marked as not part of the code. */
+function lineNumber(el: Element): boolean {
+  const text = el.textContent ?? "";
+  if (!/^\s*\d+\s*$/.test(text)) return false;
+  if (el.hasAttribute("data-line-number") || /line-?num|lineno|gutter|(^|[-_\s])ln([-_\s]|$)/i.test(el.getAttribute("class") ?? "")) return true;
+  return getComputedStyle(el).userSelect === "none";
+}
+
+/**
+ * The text of a code block as copying it gives: without what is drawn in it but is not code (a Copy button,
+ * line numbers, what is hidden from screen readers), shadow roots included, a line per row.
+ */
+export function codeText(el: Element): string {
+  let out = "";
+  const visit = (n: Node, top: boolean) => {
+    if (n.nodeType === Node.TEXT_NODE) {
+      out += (n as Text).data;
+      return;
+    }
+    if (!(n instanceof Element)) return;
+    if (isOurs(n) || SKIP_TEXT.has(n.localName)) return;
+    if (!top && (isButtonish(n) || n.getAttribute("aria-hidden") === "true" || lineNumber(n))) return;
+    if (n.localName === "br") {
+      out += "\n";
+      return;
+    }
+    if (!top && BLOCK.has(n.localName) && out && !out.endsWith("\n")) out += "\n";
+    const sr = shadowOf(n);
+    if (sr) for (const c of sr.childNodes) visit(c, false);
+    for (const c of n.childNodes) visit(c, false);
+  };
+  visit(el, true);
+  return out;
+}
+
 /**
  * Every element under `root`, in document order, shadow roots included (each right after its host), the
  * extension's own elements and the subtree of `skip` left out. Pages built of web components keep their
- * messages in shadow roots.
+ * messages in shadow roots. `prune(el)`, asked once the caller had `el`: true when nothing under it is wanted
+ * (its children and its shadow root are passed over).
  */
-export function* deepElements(root: Element | ShadowRoot | Document, skip?: Element): Generator<Element> {
+export function* deepElements(root: Element | ShadowRoot | Document, skip?: Element, prune?: (el: Element) => boolean): Generator<Element> {
   const own = root instanceof Element ? shadowOf(root) : null;
-  if (own) yield* deepElements(own, skip);
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT, {
-    acceptNode: (n) => (n === skip || isOurs(n as Element) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT),
-  });
-  for (let n = walker.nextNode(); n; n = walker.nextNode()) {
-    const el = n as Element;
-    yield el;
-    const sr = shadowOf(el);
-    if (sr) yield* deepElements(sr, skip);
+  if (own) yield* deepElements(own, skip, prune);
+  // walked by hand: a filter callback for every element costs more than the walk itself
+  const w = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
+  let n = w.firstChild() as Element | null;
+  while (n) {
+    let down = false;
+    if (n !== skip && !isOurs(n)) {
+      yield n;
+      if (!prune?.(n)) {
+        const sr = shadowOf(n);
+        if (sr) yield* deepElements(sr, skip, prune);
+        down = true;
+      }
+    }
+    let next: Node | null = down ? w.firstChild() : null;
+    while (!next && w.currentNode !== root) {
+      next = w.nextSibling();
+      if (!next && !w.parentNode()) break;
+    }
+    n = next as Element | null;
+  }
+}
+
+/** `root` and every shadow root under it (each tree once): for reading all the text of a part of the page. */
+export function* treesUnder(root: Element | ShadowRoot): Generator<Element | ShadowRoot> {
+  yield root;
+  const own = root instanceof Element && !isOurs(root) ? shadowOf(root) : null;
+  if (own) yield* treesUnder(own);
+  const w = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
+  for (let n = w.nextNode() as Element | null; n; n = w.nextNode() as Element | null) {
+    if (isOurs(n)) continue;
+    const sr = shadowOf(n);
+    if (sr) yield* treesUnder(sr);
   }
 }
 
@@ -173,8 +257,8 @@ export function elementAtByBox(root: ShadowRoot, x: number, y: number): Element 
   return found;
 }
 
-/** The element's parent, through a shadow root to its host. */
-export function parentOf(el: Element): Element | null {
+/** The node's parent element, through a shadow root to its host. */
+export function parentOf(el: Node): Element | null {
   const p = el.parentNode;
   return p instanceof ShadowRoot ? p.host : p instanceof Element ? p : null;
 }
@@ -197,8 +281,43 @@ export function valueOf(ed: HTMLElement): string {
   return ed.innerText.replace(/\u00a0/g, " ").trim();
 }
 
+export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** An element named for the status line and the logs, not too long. */
+export const short = (el: Element | null) => (el ? describe(el).slice(0, 80) : "");
+
+/** Selects all the text of the input box `ed`. */
+export function selectAllIn(ed: HTMLElement): void {
+  if (ed instanceof HTMLTextAreaElement || ed instanceof HTMLInputElement) ed.select();
+  else select((r) => r.selectNodeContents(ed));
+}
+
+/** Puts the caret at the start of the input box `ed`. */
+export function caretToStart(ed: HTMLElement): void {
+  if (ed instanceof HTMLTextAreaElement || ed instanceof HTMLInputElement) ed.setSelectionRange(0, 0);
+  else
+    select((r) => {
+      r.setStart(ed.firstChild ?? ed, 0);
+      r.collapse(true);
+    });
+}
+
+function select(set: (r: Range) => void): void {
+  const range = document.createRange();
+  set(range);
+  const sel = getSelection();
+  sel?.removeAllRanges();
+  sel?.addRange(range);
+}
+
 /** Writes `text` where the selection is in `ed`, the way typing does, so that the page's own editor follows. */
 export function typeText(ed: HTMLElement, text: string): boolean {
+  // an editor that keeps its own text takes typing through beforeinput: it cancels the event and writes the text
+  // itself (execCommand fires no beforeinput). Where no one takes it, a script's event changes nothing.
+  if (!(ed instanceof HTMLTextAreaElement || ed instanceof HTMLInputElement)) {
+    const before = new InputEvent("beforeinput", { inputType: "insertText", data: text, bubbles: true, cancelable: true, composed: true });
+    if (!ed.dispatchEvent(before)) return true;
+  }
   if (document.execCommand("insertText", false, text)) return true;
   // the editor turned the command down: hand it the text as a paste
   const data = new DataTransfer();

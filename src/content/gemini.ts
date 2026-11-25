@@ -9,7 +9,7 @@
 
 import { t } from "../shared/i18n.ts";
 import { looksLikeCall, MARK, parseCalls, resultsEnd, summarizeResults, TOOLS_HEADING } from "../shared/protocol.ts";
-import { dbg, type Finished, type Item, type Page, type Progress } from "./page.ts";
+import { caretToStart, dbg, selectAllIn, sleep, type Finished, type Item, type Page, type Progress } from "./page.ts";
 import { Card, collapse } from "./ui.ts";
 
 const SEL = {
@@ -142,27 +142,16 @@ function focusEditor(): HTMLElement | null {
 function insertAtStart(text: string): boolean {
   const ed = focusEditor();
   if (!ed) return false;
-  const range = document.createRange();
-  range.setStart(ed.firstChild ?? ed, 0);
-  range.collapse(true);
-  const sel = getSelection();
-  sel?.removeAllRanges();
-  sel?.addRange(range);
+  caretToStart(ed);
   return document.execCommand("insertText", false, text);
 }
 
 function replaceText(text: string): boolean {
   const ed = focusEditor();
   if (!ed) return false;
-  const range = document.createRange();
-  range.selectNodeContents(ed);
-  const sel = getSelection();
-  sel?.removeAllRanges();
-  sel?.addRange(range);
+  selectAllIn(ed);
   return document.execCommand("insertText", false, text);
 }
-
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /**
  * Clicks send once the button is ready; true when Gemini started writing or the box emptied.
@@ -171,12 +160,17 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  * A click Gemini did not take (a dialog came up over the page at that moment) is made again after a while: Gemini
  * empties the box at once when it takes one.
  */
+/** Counts the stops: a send still trying when the extension was turned off gives up. */
+let stops = 0;
+
 async function submit(timeoutMs = 8000): Promise<boolean> {
   await sleep(300);
   const end = Date.now() + timeoutMs;
+  const gen = stops;
   let clickedAt = 0;
   let clicks = 0;
   while (Date.now() < end) {
+    if (gen !== stops) return false;
     if (clicks && (isGenerating() || editorText() === "")) return true;
     const b = sendButton();
     if (b && (!clicks || (clicks < 3 && Date.now() - clickedAt > RECLICK_MS))) {
@@ -342,6 +336,7 @@ export class GeminiPage implements Page {
   }
 
   stop(): void {
+    stops++;
     this.otherConversation();
     for (const c of document.querySelectorAll(".gmb-chip")) c.remove();
     for (const l of document.querySelectorAll(".gmb-hidden-line")) l.classList.remove("gmb-hidden-line");

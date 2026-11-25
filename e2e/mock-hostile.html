@@ -1,0 +1,449 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Hostile chat</title>
+    <style>
+      body { margin: 0; background: #fff; }
+    </style>
+  </head>
+  <body>
+    <div id="host"></div>
+    <script>
+      // A chat page made to trip the extension up, for the generic mode. Each behavior is an option of window.__opts:
+      //   lineNumbers  code blocks as one row per line with a line number in it (not copied: user-select none), a
+      //                language label and a Copy button inside the block; no <pre> or <code>
+      //   srCopy       a visually hidden copy of each reply (an aria-live region) with all its text
+      //   virtual: N   only the last N turns are in the page (the others are taken out, as virtual lists do)
+      //   pauseMs: N   the reply stops for N ms before its code block
+      //   rawThenRender  while written, the reply is its raw markdown (fences as text); drawn when finished
+      //   ctrlEnter    Enter makes a new line; Ctrl+Enter or Cmd+Enter sends
+      //   ownEditor    the input box takes text only through beforeinput and paste, keeps its own text, draws itself
+      //   textarea     the input box is a textarea
+      //   newInput     the input box is made anew after each send
+      //   feedback     a "Send feedback" button by the input box, before the send button
+      //   iconButton   the send button is a div with role=button, no name, its icon a CSS background
+      //   noStop       no stop button: the send button is only greyed while a reply is written
+      //   redraw: N    every N ms every turn is drawn anew, also when nothing changed
+      //   closedShadow everything in a closed shadow root (window.__root holds it, for the tests)
+      //   sidebar      a list of chats beside the box, its items div buttons named "How to stop nginx", "Send invoice
+      //                to Kim" (clicks counted in window.__sidebar)
+      //   mentions     "@" opens a list of people under the box; Enter picks from it (aria-expanded on the box)
+      //   canvas       a tall document one writes in beside the chat (contenteditable, Enter is a new line there)
+      //   lateMine: N  the user's message is drawn only N ms after it went (a server that answers first)
+      //   swapLate: N  N ms after a reply is finished its code blocks are drawn otherwise (a heading with the
+      //                language and a Copy button, line numbers): other elements, other text
+      //   window.__switch(): another conversation opened from the list: the address changes at once, the other
+      //                conversation (with an old call in it) is drawn 600 ms later
+      // Replies: window.__replies, one per message; the extension's test message gets the code block it asks for.
+      const O = window.__opts || {};
+      window.__sent = [];
+      window.__replies = window.__replies || [];
+      window.__feedback = 0;
+      window.__sidebar = 0;
+
+      const CSS = `
+        .app { font: 14px sans-serif; color: #111; }
+        .turns { max-width: 760px; margin: 0 auto; padding: 16px 16px 220px; }
+        .turn { display: block; margin: 14px 0; }
+        .turn[data-author="user"] .body { margin-left: auto; max-width: 70%; background: #eef; padding: 8px 12px; border-radius: 12px; white-space: pre-wrap; }
+        .cb { border: 1px solid #ccc; border-radius: 8px; margin: 8px 0; font-family: monospace; }
+        .cb-bar { display: flex; justify-content: space-between; background: #f3f3f3; padding: 2px 8px; font-size: 12px; }
+        .row { display: flex; gap: 12px; white-space: pre; padding: 0 8px; }
+        .ln { color: #999; user-select: none; min-width: 2ch; text-align: right; }
+        pre { background: #111; color: #eee; padding: 8px; white-space: pre-wrap; }
+        .composer { position: fixed; left: 50%; transform: translateX(-50%); bottom: 24px; width: min(760px, 90vw); display: flex; gap: 8px;
+          align-items: end; border: 1px solid #bbb; border-radius: 14px; padding: 8px; background: #fff; box-sizing: border-box; }
+        .editor { flex: 1; min-height: 24px; max-height: 240px; overflow-y: auto; white-space: pre-wrap; outline: none; font: inherit; }
+        textarea.editor { border: 0; resize: none; }
+        .send { width: 32px; height: 32px; border-radius: 50%; border: 0; cursor: pointer; flex: none; background: #1a73e8 center / 14px no-repeat
+          url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'%3E%3Cpath d='M5 1 9 6H6v3H4V6H1z' fill='white'/%3E%3C/svg%3E"); }
+        .send.is-stop { background: #c5221f; }
+        .send[disabled], .send[aria-disabled="true"] { opacity: .4; cursor: default; }
+        .fb { font-size: 12px; flex: none; }
+        .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+        .dialog { position: fixed; top: 20px; left: 20px; padding: 8px; border: 1px solid #999; background: #ffd; }
+        .side { position: fixed; left: 0; top: 0; bottom: 0; width: 200px; display: flex; flex-direction: column; justify-content: flex-end;
+          gap: 4px; padding: 8px; box-sizing: border-box; background: #f6f6f6; }
+        .side [role="button"] { padding: 6px; border-radius: 6px; cursor: pointer; }
+        .people { position: fixed; bottom: 80px; left: 50%; border: 1px solid #aaa; background: #fff; padding: 4px; }
+        .canvas { position: fixed; right: 0; top: 0; width: 260px; height: 80vh; overflow: auto; border-left: 1px solid #ccc;
+          padding: 8px; box-sizing: border-box; white-space: pre-wrap; outline: none; }
+      `;
+
+      const host = document.getElementById("host");
+      const root = O.closedShadow ? host.attachShadow({ mode: "closed" }) : host;
+      window.__root = root;
+      const style = document.createElement("style");
+      style.textContent = CSS;
+      const app = document.createElement("div");
+      app.className = "app";
+      const turnsEl = document.createElement("div");
+      turnsEl.className = "turns";
+      const composer = document.createElement("div");
+      composer.className = "composer";
+      const live = document.createElement("div");
+      live.className = "sr-only";
+      live.setAttribute("aria-live", "polite");
+      app.append(turnsEl, composer);
+      if (O.sidebar) {
+        const side = document.createElement("div");
+        side.className = "side";
+        for (const name of ["New chat", "How to stop nginx", "Send invoice to Kim"]) {
+          const item = document.createElement("div");
+          item.setAttribute("role", "button");
+          item.textContent = name;
+          item.addEventListener("click", () => window.__sidebar++);
+          side.append(item);
+        }
+        app.append(side);
+      }
+      if (O.canvas) {
+        const doc = document.createElement("div");
+        doc.className = "canvas";
+        doc.contentEditable = "true";
+        doc.setAttribute("aria-label", "Document");
+        doc.textContent = "Notes";
+        app.append(doc);
+      }
+      root.append(style, app, live);
+
+      const turns = [];
+      let writing = false;
+      let editor = null;
+      let model = "";
+
+      // -----------------------------------------------------------------------------------------------------
+      // The input box
+
+      function textNow() {
+        if (O.ownEditor) return model.trim();
+        if (O.textarea) return editor.value.trim();
+        return editor.innerText.replace(/ /g, " ").trim();
+      }
+
+      function makeEditor() {
+        let ed;
+        if (O.textarea) {
+          ed = document.createElement("textarea");
+        } else {
+          ed = document.createElement("div");
+          ed.contentEditable = "true";
+          ed.setAttribute("role", "textbox");
+        }
+        ed.className = "editor";
+        ed.setAttribute("aria-label", "Message");
+        if (O.ownEditor) {
+          model = "";
+          const offsets = () => {
+            const sel = (root.getSelection ? root.getSelection() : null) || getSelection();
+            if (!sel.rangeCount) return [model.length, model.length];
+            const r = sel.getRangeAt(0);
+            const off = (node, o) => (node === ed ? (o === 0 ? 0 : model.length) : Math.min(o, model.length));
+            return [off(r.startContainer, r.startOffset), off(r.endContainer, r.endOffset)];
+          };
+          const draw = (caret) => {
+            ed.textContent = model;
+            const r = document.createRange();
+            if (ed.firstChild) r.setStart(ed.firstChild, Math.min(caret, model.length));
+            else r.setStart(ed, 0);
+            r.collapse(true);
+            const sel = getSelection();
+            sel.removeAllRanges();
+            sel.addRange(r);
+            update();
+          };
+          const put = (text) => {
+            const [a, b] = offsets();
+            model = model.slice(0, a) + text + model.slice(b);
+            draw(a + text.length);
+          };
+          ed.addEventListener("beforeinput", (e) => {
+            e.preventDefault();
+            if (e.inputType === "insertText" || e.inputType === "insertReplacementText" || e.inputType === "insertFromPaste")
+              put(e.data ?? e.dataTransfer?.getData("text/plain") ?? "");
+            else if (e.inputType === "insertParagraph" || e.inputType === "insertLineBreak") put("\n");
+            else if (e.inputType === "deleteContentBackward" || e.inputType === "deleteContentForward" || e.inputType === "deleteByCut") {
+              const [a, b] = offsets();
+              if (a !== b) put("");
+              else if (a > 0 && e.inputType === "deleteContentBackward") {
+                model = model.slice(0, a - 1) + model.slice(a);
+                draw(a - 1);
+              }
+            }
+          });
+          ed.addEventListener("paste", (e) => {
+            e.preventDefault();
+            put(e.clipboardData?.getData("text/plain") ?? "");
+          });
+        }
+        ed.addEventListener("input", update);
+        if (O.mentions) ed.addEventListener("input", () => (textNow().endsWith("@") ? openPeople(ed) : closePeople(ed)));
+        ed.addEventListener("keydown", (e) => {
+          if (e.key !== "Enter" || e.shiftKey || e.isComposing) return;
+          if (people) {
+            // Enter picks the person
+            e.preventDefault();
+            ed.focus();
+            document.execCommand("insertText", false, "alice ");
+            closePeople(ed);
+            return;
+          }
+          const mod = e.ctrlKey || e.metaKey;
+          if (O.ctrlEnter && !mod) return; // a new line, as the box does by itself
+          e.preventDefault();
+          send();
+        });
+        return ed;
+      }
+
+      let people = null;
+      function openPeople(ed) {
+        if (people) return;
+        people = document.createElement("div");
+        people.className = "people";
+        people.setAttribute("role", "listbox");
+        const opt = document.createElement("div");
+        opt.id = "person-alice";
+        opt.setAttribute("role", "option");
+        opt.textContent = "alice";
+        people.append(opt);
+        app.append(people);
+        ed.setAttribute("aria-expanded", "true");
+        ed.setAttribute("aria-activedescendant", opt.id);
+      }
+      function closePeople(ed) {
+        people?.remove();
+        people = null;
+        ed.setAttribute("aria-expanded", "false");
+        ed.removeAttribute("aria-activedescendant");
+      }
+
+      function clearEditor() {
+        if (O.newInput) {
+          const fresh = makeEditor();
+          editor.replaceWith(fresh);
+          editor = fresh;
+        } else if (O.ownEditor) {
+          model = "";
+          editor.textContent = "";
+        } else if (O.textarea) editor.value = "";
+        else editor.replaceChildren();
+      }
+
+      // -----------------------------------------------------------------------------------------------------
+      // The buttons
+
+      const sendBtn = document.createElement(O.iconButton ? "div" : "button");
+      sendBtn.className = "send";
+      if (O.iconButton) {
+        sendBtn.setAttribute("role", "button");
+        sendBtn.tabIndex = 0;
+      } else sendBtn.type = "button";
+      sendBtn.addEventListener("click", () => {
+        if (writing && !O.noStop) stop();
+        else send();
+      });
+      if (O.feedback) {
+        const fb = document.createElement("button");
+        fb.className = "fb";
+        fb.textContent = "Send feedback";
+        fb.addEventListener("click", () => {
+          window.__feedback++;
+          const d = document.createElement("div");
+          d.className = "dialog";
+          d.textContent = "Tell us what you think";
+          app.append(d);
+        });
+        composer.append(fb);
+      }
+      editor = makeEditor();
+      composer.prepend(editor);
+      composer.append(sendBtn);
+
+      function update() {
+        const stopping = writing && !O.noStop;
+        const off = writing ? O.noStop : !textNow();
+        sendBtn.classList.toggle("is-stop", stopping);
+        if (!O.iconButton) {
+          sendBtn.setAttribute("aria-label", stopping ? "Stop" : "Send");
+          sendBtn.disabled = !!off;
+        } else sendBtn.setAttribute("aria-disabled", String(!!off));
+      }
+      update();
+
+      // -----------------------------------------------------------------------------------------------------
+      // The turns
+
+      function codeBlock(lang, code, fancy) {
+        if (!O.lineNumbers && !fancy) {
+          const pre = document.createElement("pre");
+          const c = document.createElement("code");
+          c.textContent = code;
+          pre.append(c);
+          return pre;
+        }
+        const box = document.createElement("div");
+        box.className = "cb";
+        const bar = document.createElement("div");
+        bar.className = "cb-bar";
+        const l = document.createElement("span");
+        l.textContent = lang || "text";
+        const copy = document.createElement("button");
+        copy.textContent = "Copy";
+        bar.append(l, copy);
+        const lines = document.createElement("div");
+        lines.className = "cb-lines";
+        code.replace(/\n$/, "").split("\n").forEach((line, i) => {
+          const row = document.createElement("div");
+          row.className = "row";
+          const n = document.createElement("span");
+          n.className = "ln";
+          n.textContent = String(i + 1);
+          const t = document.createElement("span");
+          t.className = "tx";
+          t.textContent = line;
+          row.append(n, t);
+          lines.append(row);
+        });
+        box.append(bar, lines);
+        return box;
+      }
+
+      function rendered(md, raw, fancy) {
+        const out = [];
+        if (raw) {
+          const p = document.createElement("p");
+          p.style.whiteSpace = "pre-wrap";
+          p.textContent = md;
+          return [p];
+        }
+        // a block still being written has no closing fence yet
+        md.split(/```([a-z]*)\n([\s\S]*?)(?:```|$)/).forEach((part, i, all) => {
+          if (i % 3 === 1) return;
+          if (i % 3 === 2) out.push(codeBlock(all[i - 1], part, fancy));
+          else
+            for (const para of part.split(/\n{2,}/)) {
+              if (!para.trim()) continue;
+              const p = document.createElement("p");
+              p.textContent = para.trim();
+              out.push(p);
+            }
+        });
+        return out;
+      }
+
+      function turnEl(t) {
+        const s = document.createElement("section");
+        s.className = "turn";
+        s.setAttribute("data-author", t.role);
+        const body = document.createElement("div");
+        body.className = "body";
+        if (t.role === "user") body.textContent = t.text;
+        else body.append(...rendered(t.text, O.rawThenRender && !t.done, t.fancy));
+        s.append(body);
+        t.el = s;
+        return s;
+      }
+
+      function draw() {
+        const shown = O.virtual ? turns.slice(-O.virtual) : turns;
+        turnsEl.replaceChildren(...shown.map(turnEl));
+      }
+
+      function drawLast() {
+        const t = turns.at(-1);
+        if (!t) return;
+        if (O.virtual || !t.el?.isConnected) return draw();
+        t.el.replaceWith(turnEl(t));
+      }
+
+      if (O.redraw) setInterval(draw, O.redraw);
+
+      // -----------------------------------------------------------------------------------------------------
+      // Sending and replying
+
+      let gen = null;
+
+      function send() {
+        const text = textNow();
+        if (!text || writing) return;
+        window.__sent.push(text);
+        clearEditor();
+        // nothing shows meanwhile: the page waits for its server
+        if (O.lateMine) setTimeout(() => answer(text), O.lateMine);
+        else answer(text);
+      }
+
+      window.__switch = () => {
+        gen = null;
+        writing = false;
+        update();
+        history.pushState(null, "", "/c/other");
+        setTimeout(() => {
+          turns.length = 0;
+          turns.push({ role: "user", text: "Read my notes" });
+          const old = '{"mcp_call": {"tool": "list_directory", "arguments": {"path": "/"}}}';
+          turns.push({ role: "bot", text: "Reading.\n\n```json\n" + old + "\n```", done: true });
+          draw();
+        }, 600);
+      };
+
+      function answer(text) {
+        turns.push({ role: "user", text });
+        const test = text.match(/"gmb_test":\s*"([^"]+)"/);
+        const reply = test ? `Here it is:\n\n\`\`\`json\n{"gmb_test": "${test[1]}"}\n\`\`\`` : (window.__replies.shift() ?? "Nothing more to say.");
+        const t = { role: "bot", text: "", done: false };
+        turns.push(t);
+        writing = true;
+        update();
+        draw();
+        const mine = (gen = {});
+        const steps = window.__steps ?? 6;
+        const fence = reply.indexOf("```");
+        let i = 0;
+        let paused = false;
+        const step = () => {
+          if (gen !== mine) return;
+          i++;
+          let upto = Math.ceil((reply.length * i) / steps);
+          if (O.pauseMs && !paused && fence > 0 && upto > fence) {
+            // stops before the code block for a while
+            upto = fence;
+            paused = true;
+            t.text = reply.slice(0, upto);
+            i--;
+            drawLast();
+            return setTimeout(step, O.pauseMs);
+          }
+          t.text = reply.slice(0, upto);
+          drawLast();
+          if (O.srCopy) live.textContent = t.text;
+          if (i < steps) return setTimeout(step, window.__stepMs ?? 200);
+          setTimeout(() => {
+            if (gen !== mine) return;
+            t.done = true;
+            drawLast();
+            writing = false;
+            update();
+            if (O.swapLate)
+              setTimeout(() => {
+                t.fancy = true;
+                if (t.el?.isConnected) t.el.replaceWith(turnEl(t));
+              }, O.swapLate);
+          }, 300);
+        };
+        setTimeout(step, window.__stepMs ?? 200);
+      }
+
+      function stop() {
+        gen = null;
+        const t = turns.at(-1);
+        if (t) t.done = true;
+        writing = false;
+        drawLast();
+        update();
+      }
+    </script>
+  </body>
+</html>

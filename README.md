@@ -105,7 +105,7 @@ On a page other than gemini.google.com, for example Gemini Enterprise (`vertexai
 **Learn the page** (once per site). Click the corner button, then **Learn this page**:
 
 1. Click the input box: a test message goes in. It asks for one short JSON code block back.
-2. Send it, with the send button or Enter. Meanwhile the extension only watches: nothing goes along with the message, and no tool runs.
+2. Send it, with the send button or Enter (Ctrl+Enter on a page that sends that way: the extension then leaves Enter alone there and sends with Ctrl+Enter too). Meanwhile the extension only watches: nothing goes along with the message, and no tool runs.
 3. A list of steps fills in as the extension sees each part: the input box, the send button, what shows that the page is writing (most often a stop button), your message, the reply, and the code block in it. When everything was seen, press **Stop learning**.
 4. The extension lists what it learned and outlines each part on the page: ✓ sure, ? a guess, ✗ not found. If a part is wrong, press **Pick** beside it and click the right element on the page: ↑ goes one layer out, ↓ back in, Enter picks, Esc cancels. The **?** beside it shows a table of what to pick for each part. Or press **Learn again**.
 
@@ -157,7 +157,7 @@ Your settings stay. The server updates the same way it was installed: `npx` take
 Read this before you allow a tool to run by itself.
 
 - **Only where you turn it on.** The extension can see a page only after you click its icon in that tab (Chrome's *activeTab*). It has no access to any site by itself.
-- **Calls wait for you.** By default every call waits for your **Run**. *Always allow* (or *Auto* on the options page) lets one tool run without asking; there is no switch that lets every tool run.
+- **Calls wait for you.** By default every call waits for your **Run**. *Always allow* (or *Auto* on the options page) lets one tool run without asking, on every page where you turn the extension on (not only the one where you pressed it); there is no switch that lets every tool run.
 - **Gemini's text is not trustworthy.** A web page, a document or an email that Gemini reads can carry instructions of its own ("prompt injection"). Keep tools that run commands or write files on **Ask** unless you watch closely.
 - **Old conversations never run calls.** A reply is handled only if this tab saw Gemini write it. Opening an old chat, reloading the page or switching chats runs nothing.
 - **Local only.** The extension may reach only `127.0.0.1` and `localhost`.
@@ -178,7 +178,7 @@ Read this before you allow a tool to run by itself.
 ## Limits
 
 - The extension reads and writes Gemini's page, which Google can change at any time. When Gemini changes its page, the extension may stop working until it is updated. All of what it relies on is in [`src/content/gemini.ts`](src/content/gemini.ts); for other pages, in [`src/content/generic.ts`](src/content/generic.ts).
-- Generic mode without learning guesses: a page whose send button has no name, or that shows code blocks in something other than `<pre>` or `<code>`, needs to be learned. A learned page that changes how it looks needs to be learned again; the status line says so when it finds no reply. How a page is learned is in [`src/content/learn.ts`](src/content/learn.ts) and [`src/content/layout.ts`](src/content/layout.ts).
+- Generic mode without learning guesses: a page whose send button has no name, or that shows code blocks without `<pre>`, `<code>` or a monospace font, needs to be learned. A learned page that changes how it looks needs to be learned again; the status line says so when it finds no reply. How a page is learned is in [`src/content/learn.ts`](src/content/learn.ts) and [`src/content/layout.ts`](src/content/layout.ts).
 - Gemini follows the protocol well, but it is a protocol in text: now and then Gemini writes a call in the wrong shape, or forgets the instructions in a very long conversation. A call it cannot read gets an error back, so that Gemini can write it again. When the tool list changes, the next message carries the new list.
 - Images, audio and other binary output of tools reach Gemini only as a short note (`[image: image/png, 120 KB, not shown]`).
 - Only Chrome. Only the top frame of a page (not a chat inside an iframe).

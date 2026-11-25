@@ -12,7 +12,7 @@ export const MARK = {
   results: "[MCP Bridge · results]",
 } as const;
 
-const CALL_KEY = "mcp_call";
+export const CALL_KEY = "mcp_call";
 
 /** A code block is a call (or a broken one) only when it holds the key as JSON writes it, not when it mentions it. */
 export function looksLikeCall(text: string): boolean {

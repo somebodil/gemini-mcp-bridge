@@ -3,6 +3,7 @@
 
 import type { BridgeState, CallReply, PortRequest, Request, ServerConfig, ServerState, Settings } from "../shared/config.ts";
 import { loadSettings, updateSettings } from "../shared/config.ts";
+import { TEST_BUILD } from "../shared/dom.ts";
 import type { ToolInfo } from "../shared/protocol.ts";
 import { exposeTools, noSuchTool } from "../shared/tools.ts";
 import { McpClient, McpError, resultToText } from "./mcp-client.ts";
@@ -188,7 +189,7 @@ async function toggleTab(tabId: number): Promise<boolean> {
 }
 
 // the tests turn tabs on this way (they cannot click the toolbar)
-(globalThis as { gmbToggleTab?: typeof toggleTab }).gmbToggleTab = toggleTab;
+if (TEST_BUILD) (globalThis as { gmbToggleTab?: typeof toggleTab }).gmbToggleTab = toggleTab;
 
 chrome.action.onClicked.addListener((tab) => {
   if (tab.id !== undefined) void toggleTab(tab.id).catch((e: unknown) => console.warn("MCP Bridge could not start in this tab:", e));

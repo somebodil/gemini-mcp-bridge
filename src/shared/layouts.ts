@@ -24,6 +24,8 @@ export interface Layout {
    */
   busy?: { at: Locator; look?: string; idle?: string };
   list?: Locator;
+  /** The page sends with Ctrl+Enter (Cmd+Enter): Enter alone makes a new line there. */
+  sendKey?: "mod";
   mine?: Pattern;
   reply?: Pattern;
   code?: Pattern;

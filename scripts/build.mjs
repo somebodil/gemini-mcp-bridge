@@ -16,7 +16,9 @@ const manifest = JSON.parse(readFileSync("static/manifest.json", "utf8"));
 if (test) manifest.host_permissions = [...manifest.host_permissions, "<all_urls>"];
 writeFileSync(`${out}/manifest.json`, `${JSON.stringify({ ...manifest, version }, null, 2)}\n`);
 
-const common = { bundle: true, target: "chrome120", logLevel: "warning", legalComments: "none" };
+// __GMB_TEST__: the tests' build keeps the extension's shadow roots open (the tests read the cards and the status
+// button), and lets the tests turn tabs on
+const common = { bundle: true, target: "chrome120", logLevel: "warning", legalComments: "none", define: { __GMB_TEST__: String(test) } };
 await build({ ...common, entryPoints: ["src/background/index.ts"], outfile: `${out}/background.js`, format: "esm" });
 await build({ ...common, entryPoints: ["src/content/index.ts"], outfile: `${out}/content.js`, format: "iife" });
 await build({ ...common, entryPoints: ["src/options/options.ts"], outfile: `${out}/options.js`, format: "iife" });

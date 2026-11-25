@@ -1,6 +1,7 @@
 // Outlines over the page: a coloured box and a name tag on each element the extension learned, so the user can
 // see whether it learned the right ones. Clicks go through to the page; the boxes follow scrolling and redraws.
 
+import { SHADOW_MODE } from "../shared/dom.ts";
 import { t } from "../shared/i18n.ts";
 import type { Role } from "./layout.ts";
 
@@ -33,7 +34,6 @@ export interface Outline {
   role: Role;
   el: Element;
   /** Shown instead of the role's name. */
-  label?: string;
 }
 
 export class Overlay {
@@ -49,7 +49,7 @@ export class Overlay {
     this.source = source;
     if (!this.host) {
       this.host = document.createElement("gmb-overlay");
-      this.root = this.host.attachShadow({ mode: "open" });
+      this.root = this.host.attachShadow({ mode: SHADOW_MODE });
       this.root.adoptedStyleSheets = [SHEET];
     }
     if (!this.host.isConnected) document.documentElement.append(this.host);
@@ -61,9 +61,6 @@ export class Overlay {
     }
   }
 
-  get shown(): boolean {
-    return !!this.host?.isConnected;
-  }
 
   hide(): void {
     if (this.timer) clearInterval(this.timer);
@@ -108,7 +105,7 @@ export class Overlay {
       box.style.cssText = `--c:${ROLE_COLOR[it.role]};left:${r.left}px;top:${r.top}px;width:${r.width}px;height:${r.height}px`;
       const tag = document.createElement("span");
       tag.className = "tag";
-      tag.textContent = it.label ?? roleName(it.role);
+      tag.textContent = roleName(it.role);
       box.append(tag);
       box.dataset.role = it.role;
       boxes.push(box);

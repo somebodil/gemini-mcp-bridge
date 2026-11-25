@@ -3,7 +3,7 @@
 // that Gemini's styles do not reach them; nothing is built from HTML strings.
 
 import type { BridgeState } from "../shared/config.ts";
-import { h, onTrustedClick } from "../shared/dom.ts";
+import { h, onTrustedClick, SHADOW_MODE } from "../shared/dom.ts";
 import { t } from "../shared/i18n.ts";
 import type { ParsedCall, ParseProblem } from "../shared/protocol.ts";
 import { ROLES, type Role } from "./layout.ts";
@@ -16,6 +16,14 @@ const ASK_GUARD_MS = 600;
 /** Characters that change how text is shown without being seen (bidi controls, zero-width) are shown as \u{...}. */
 function visible(s: string): string {
   return s.replace(/[​-‏‪-‮⁠-⁩﻿]/g, (c) => `\\u{${c.codePointAt(0)?.toString(16).toUpperCase()}}`);
+}
+
+/**
+ * Arguments as asked about: a long run of spaces after some text (one that pushes the rest of a command out of
+ * sight) is shown by its length.
+ */
+function argsShown(s: string): string {
+  return visible(s).replace(/(?<=\S)[ \u00a0\u2000-\u200a\u202f\u205f\u3000]{12,}/g, (run) => " \u27e8" + run.length + " spaces\u27e9 ");
 }
 
 /** Dark when the page's background is dark: Gemini follows its own theme setting, not only the system's. */
@@ -43,6 +51,7 @@ button:disabled { opacity: .5; cursor: default; }
 button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 pre { margin: 4px 0 0; padding: 8px; max-height: 240px; overflow: auto; white-space: pre-wrap; word-break: break-word;
   font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: rgba(127,127,127,.12); border-radius: 6px; }
+pre.full { max-height: none; }
 details > summary { cursor: pointer; color: var(--muted); margin-top: 4px; }
 .ok { color: var(--ok); } .err { color: var(--err); } .warn { color: var(--warn); } .muted { color: var(--muted); }
 `;
@@ -79,7 +88,7 @@ export class Row {
   private readonly argsText: string;
 
   constructor(tool: string, args: unknown) {
-    this.argsText = args === undefined ? "" : visible(JSON.stringify(args, null, 2));
+    this.argsText = args === undefined ? "" : argsShown(JSON.stringify(args, null, 2));
     this.stateEl = h("span", { class: "state" });
     this.body = h("div");
     this.el = h("div", { class: "row" }, h("div", { class: "head" }, h("span", {}, "🔧"), h("span", { class: "tool" }, tool), this.stateEl), this.body);
@@ -102,7 +111,8 @@ export class Row {
     this.stateEl.className = `state ${cls}`;
     this.stateEl.replaceChildren(state === "running" ? h("span", { class: "spin" }) : "", ` ${label}${time}`);
     const parts: Node[] = [];
-    if (this.argsText && this.argsText !== "{}") parts.push(this.details(t("args"), this.argsText, state === "ask"));
+    // asked about: all of it, however long (nothing of a command hidden below the fold)
+    if (this.argsText && this.argsText !== "{}") parts.push(this.details(t("args"), this.argsText, state === "ask", state === "ask"));
     if (detail.note) parts.push(h("div", { class: "muted" }, visible(detail.note)));
     if (detail.output !== undefined) {
       const out = visible(detail.output.length > 4000 ? `${detail.output.slice(0, 4000)}\n...` : detail.output || "(no output)");
@@ -144,8 +154,8 @@ export class Row {
     });
   }
 
-  private details(title: string, text: string, open: boolean): HTMLDetailsElement {
-    const d = h("details", {}, h("summary", {}, title), h("pre", {}, text));
+  private details(title: string, text: string, open: boolean, full = false): HTMLDetailsElement {
+    const d = h("details", {}, h("summary", {}, title), h("pre", full ? { class: "full" } : {}, text));
     d.open = open;
     return d;
   }
@@ -172,7 +182,7 @@ export class Card {
 
   constructor() {
     this.host = document.createElement("gmb-card");
-    const root = this.host.attachShadow({ mode: "open" });
+    const root = this.host.attachShadow({ mode: SHADOW_MODE });
     root.adoptedStyleSheets = [CARD_SHEET];
     this.box = h("div", { class: "card" });
     root.append(this.box);
@@ -268,7 +278,6 @@ label { display: flex; gap: 8px; align-items: center; cursor: pointer; }
 .learn { width: 360px; max-width: calc(100vw - 32px); max-height: calc(100vh - 80px); overflow: auto; box-sizing: border-box;
   padding: 12px; border-radius: 12px; border: 1px solid var(--accent); background: var(--bg); box-shadow: 0 4px 16px rgba(0,0,0,.25);
   display: grid; gap: 8px; }
-.roles li { grid-template-columns: 18px 1fr auto; align-items: start; }
 .roles .detail { grid-column: 2 / 4; }
 .row-actions { display: flex; gap: 4px; }
 .row-actions button { padding: 1px 8px; font-size: 12px; }
@@ -283,6 +292,7 @@ label { display: flex; gap: 8px; align-items: center; cursor: pointer; }
 .title { font-weight: 600; }
 .steps, .roles { margin: 0; padding: 0; list-style: none; display: grid; gap: 4px; }
 .steps li, .roles li { display: grid; grid-template-columns: 18px 1fr; gap: 0 6px; }
+.roles li { grid-template-columns: 18px 1fr auto; align-items: start; }
 .steps li.todo { color: var(--muted); }
 .steps li.now { font-weight: 600; }
 .mark { text-align: center; font-weight: 600; }
@@ -329,7 +339,7 @@ export class Pill {
   constructor(handlers: PillHandlers) {
     this.handlers = handlers;
     this.host = document.createElement("gmb-status");
-    this.root = this.host.attachShadow({ mode: "open" });
+    this.root = this.host.attachShadow({ mode: SHADOW_MODE });
     this.root.adoptedStyleSheets = [PILL_SHEET];
     document.documentElement.append(this.host);
     this.place(this.saved());
@@ -517,7 +527,6 @@ export class Pill {
       return stack;
     }
     if (box.kind === "picking") {
-      el.classList.add("picking");
       el.append(
         h("div", { class: "title" }, t("pickTitle", { role: roleName(box.role) })),
         h("div", { class: "small" }, t("pickKeys")),

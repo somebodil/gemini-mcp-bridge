@@ -26,7 +26,7 @@ import {
   type Locator,
   type Role,
 } from "./layout.ts";
-import { buttonOf, deepElements, deepTarget, describe, editableOf, isButtonish, isOurs, parentOf, SEND, shadowOf, STOP, typeText, valueOf } from "./page.ts";
+import { buttonOf, deepElements, deepTarget, editableOf, isButtonish, isOurs, parentOf, selectAllIn, SEND, shadowOf, short, STOP, typeText, valueOf } from "./page.ts";
 
 const TICK_MS = 300;
 /** The reply's text unchanged this long, and the indicator back: the reply is finished. */
@@ -73,6 +73,8 @@ interface Sent {
   button: Element | null;
   /** The looks of the buttons near the input box at that moment. */
   before: Map<string, string>;
+  /** Sent with Ctrl+Enter (Cmd+Enter). */
+  mod?: boolean;
 }
 
 interface Parts {
@@ -94,7 +96,6 @@ interface Busy {
   ended: boolean;
 }
 
-const short = (el: Element | null) => (el ? describe(el).slice(0, 80) : "");
 
 /** Buttons near `from`: in its parent, its grandparent and so on, nearest first. */
 function buttonsNear(from: Element, levels = 4, max = 60): Element[] {
@@ -133,20 +134,11 @@ function chain(el: Element): Element[] {
   return out;
 }
 
-function parentOfNode(n: Node): Element | null {
-  const p = n.parentNode;
-  return p instanceof ShadowRoot ? p.host : p instanceof Element ? p : null;
-}
 
-function selectAll(ed: HTMLElement): void {
-  if (ed instanceof HTMLTextAreaElement || ed instanceof HTMLInputElement) ed.select();
-  else {
-    const range = document.createRange();
-    range.selectNodeContents(ed);
-    const sel = getSelection();
-    sel?.removeAllRanges();
-    sel?.addRange(range);
-  }
+function sameLooks(a: Sample, b: Sample): boolean {
+  if (a.looks.size !== b.looks.size) return false;
+  for (const [k, v] of a.looks) if (b.looks.get(k) !== v) return false;
+  return true;
 }
 
 export class Learner {
@@ -208,7 +200,7 @@ export class Learner {
       this.input = ed;
       this.inputLoc = locatorOf(ed);
       ed.focus();
-      selectAll(ed);
+      selectAllIn(ed);
       typeText(ed, this.message);
     }
     this.changed();
@@ -251,7 +243,7 @@ export class Learner {
     if (!e.isTrusted || e.key !== "Enter" || e.shiftKey || e.isComposing || e.keyCode === 229 || this.sent) return;
     const ed = editableOf(deepTarget(e));
     if (!ed || ed !== this.inputNow() || !this.holdsMessage()) return;
-    this.attempt = { at: Date.now(), button: null, before: this.sample().looks };
+    this.attempt = { at: Date.now(), button: null, before: this.sample().looks, mod: e.ctrlKey || e.metaKey };
   };
 
   // -------------------------------------------------------------------------------------------------------
@@ -286,7 +278,11 @@ export class Learner {
       } else if (now - this.attempt.at > SEND_CONFIRM_MS) this.attempt = null;
     }
     if (this.sent) {
-      this.samples.push(this.sample());
+      // a look that stays the same is kept as two samples (enough to tell that it stayed): a box left open does
+      // not grow without end
+      const s = this.sample();
+      const n = this.samples.length;
+      if (!(n >= 2 && sameLooks(s, this.samples[n - 1]) && sameLooks(s, this.samples[n - 2]))) this.samples.push(s);
       this.scan(now);
       if (this.finished(now)) this.complete = true;
     }
@@ -299,7 +295,7 @@ export class Learner {
     const replies: Element[] = [];
     const box = this.inputNow();
     for (const n of textNodesWith(document.body ?? document.documentElement, this.nonce)) {
-      const p = parentOfNode(n);
+      const p = parentOf(n);
       if (!p || (box && contains(box, p)) || p.getClientRects().length === 0) continue;
       const isMine = letters(n.data).includes(this.head) || letters(deepText(p)).includes(this.head);
       (isMine ? mine : replies).push(p);
@@ -454,7 +450,7 @@ export class Learner {
     };
     const detail: Partial<Record<Step, string>> = {
       input: short(this.input),
-      send: this.sent ? (this.sent.button ? short(this.sent.button) : "Enter") : undefined,
+      send: this.sent ? (this.sent.button ? short(this.sent.button) : this.sent.mod ? "Ctrl+Enter" : "Enter") : undefined,
       busy: busy?.look,
       mine: short(this.parts?.mine ?? null),
       reply: short(this.parts?.reply ?? null),
@@ -514,14 +510,16 @@ export class Learner {
       layout.send = locatorOf(this.sent.button, this.sent.button.isConnected);
       add("send", b && resolve(layout.send) === b ? "ok" : "unsure", b ?? resolve(layout.send));
     } else if (this.sent) {
+      if (this.sent.mod) layout.sendKey = "mod";
+      const note = t(this.sent.mod ? "noteModEnter" : "noteEnter");
       // sent with Enter: a button by the box named like a send button
       const key = [...this.sent.before.entries()].find(([, look]) => SEND.test(look) && !STOP.test(look) && look !== "absent" && look !== "hidden")?.[0];
       const el = key ? this.elements.get(key) : undefined;
       const loc = el?.isConnected ? locatorOf(el, true) : key ? this.locators.get(key) : undefined;
       if (loc) {
         layout.send = loc;
-        add("send", "unsure", resolve(loc) ?? this.elements.get(key as string) ?? null, t("noteEnter"));
-      } else add("send", "missing", null, t("noteEnter"));
+        add("send", "unsure", resolve(loc) ?? this.elements.get(key as string) ?? null, note);
+      } else add("send", "missing", null, note);
     } else add("send", "missing", null, t("noteNotSeen"));
 
     const busyEl = busy ? this.elements.get(busy.key) : undefined;
@@ -633,8 +631,11 @@ export function outlineItems(layout: Layout): { role: Role; el: Element }[] {
   const busy = resolve(layout.busy?.at);
   if (busy && !out.some((o) => o.el === busy)) out.push({ role: "busy", el: busy });
   const list = resolve(layout.list) ?? document.body;
-  for (const role of ["mine", "reply"] as const) for (const el of findAll(layout[role], list, 50)) out.push({ role, el });
-  const replies = findAll(layout.reply, list, 50);
-  for (const r of replies) for (const el of findAll(layout.code, r, 20)) out.push({ role: "code", el });
+  // the last ones (the newest messages, where the test message is): a long conversation has more than are outlined
+  const mine = findAll(layout.mine, list).slice(-50);
+  const replies = findAll(layout.reply, list).slice(-50);
+  for (const el of mine) out.push({ role: "mine", el });
+  for (const el of replies) out.push({ role: "reply", el });
+  for (const r of replies) for (const el of findAll(layout.code, r).slice(0, 20)) out.push({ role: "code", el });
   return out;
 }

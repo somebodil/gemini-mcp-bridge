@@ -8,11 +8,11 @@ import type { BridgeState, CallReply, ExposedTool, Request } from "../shared/con
 import { t } from "../shared/i18n.ts";
 import { buildInstructions, buildToolsUpdate, formatResults, toolsHash, type Outcome, type ParsedCall } from "../shared/protocol.ts";
 import { noSuchTool } from "../shared/tools.ts";
-import { layoutChange, loadLayout, saveLayout, type Layout, type Role } from "./layout.ts";
+import { layoutChange, letters, loadLayout, saveLayout, type Layout, type Role } from "./layout.ts";
 import { checkLayout, Learner, outlineItems, withPicked, type RoleResult } from "./learn.ts";
 import { Overlay } from "./overlay.ts";
 import { Picker } from "./picker.ts";
-import { dbg, describe, inputAreaRects, pageStructure, type Finished, type Page } from "./page.ts";
+import { dbg, deepTarget, editableOf, inputAreaRects, isOurs, pageStructure, short, sleep, type Finished, type Page } from "./page.ts";
 import { installPageStyle, pageIsDark, Pill, removePageStyle, setTheme, type FlowView, type LearnBox, type Notice, type Row } from "./ui.ts";
 
 /** Where the exchange that went out last stands, for the status line. */
@@ -22,6 +22,10 @@ type Flow =
   | { stage: "sending" | "done" | "stopped"; at: number };
 
 const MAX_CALLS_PER_REPLY = 10;
+/** After the address changed, the conversation is looked at again this long: a page may draw the other one later. */
+const NAV_RECHECK_MS = 4000;
+/** An event of the extension's own elements (the status button, a card): not the page's. */
+const fromUs = (e: Event) => e.composedPath().some((n) => n instanceof Element && isOurs(n));
 /** No reply seen this long after sending, the page not writing: the status line says so and what can be done. */
 const STUCK_MS = 45_000;
 /** The same this long after the page stopped writing. */
@@ -43,6 +47,10 @@ export function startBridge(page: Page): () => void {
   let rounds = 0;
   /** True while a send of the user is held back to add text in front of it. */
   let holding = false;
+  /** The extension's send of the user's message did not go: the next one is left to the page as it is. */
+  let passNext = false;
+  /** The address changed and the conversation looked the same: looked at again until `until`. */
+  let navCheck: { from: string; until: number } | null = null;
   /** The calls being handled; aborted when the user leaves the chat or turns it off. */
   let run: AbortController | null = null;
   /** Results that wait because the user is writing; they go in front of the user's next message. */
@@ -208,10 +216,13 @@ export function startBridge(page: Page): () => void {
   async function givenHash(): Promise<string | null> {
     const key = page.givenKey();
     const onPage = page.instructionsOnPage();
+    // the end of the last message sent still shown: the same conversation, its first turns dropped (a virtual list)
+    const goesOn = !onPage && page.addressShared && page.sameConversation(location.href);
     if (key) {
       const all = ((await chrome.storage.local.get(GIVEN_KEY))[GIVEN_KEY] ?? {}) as Record<string, [string, number]>;
-      if (all[key] && (onPage || !page.addressShared)) return all[key][0];
+      if (all[key] && (onPage || goesOn || !page.addressShared)) return all[key][0];
     }
+    if (goesOn && lastGiven) return lastGiven;
     if (!onPage) return null;
     // a new chat whose address was not known when its first message went out: those were the last instructions
     // this tab sent
@@ -249,7 +260,9 @@ export function startBridge(page: Page): () => void {
     rounds = 0;
     userStopped = false;
     if (notice?.kind === "paused") notice = null;
-    if (!pendingResults && (!state || state.tools.length === 0)) {
+    if (passNext || (!pendingResults && (!state || state.tools.length === 0))) {
+      // after a send of the extension's that did not go, the text is in the box as it was to go: the page sends it
+      passNext = false;
       page.expect(page.editorText());
       return;
     }
@@ -273,14 +286,29 @@ export function startBridge(page: Page): () => void {
             given = hash;
           }
         }
-        if (pendingResults) {
+        const results = pendingResults;
+        if (results) {
           along.push("results");
-          parts.push(pendingResults);
-          pendingResults = null;
-          if (notice?.kind === "results") notice = null;
+          parts.push(results);
+        }
+        if (parts.length) {
+          page.insertAtStart(`${parts.join("\n\n")}\n\n`);
+          // an editor may turn the text down (or take it a moment later): then nothing went along, and results wait on
+          const inBox = () => letters(page.editorText()).includes(letters(parts[0]).slice(0, 40));
+          if (!inBox()) await sleep(200);
+          if (inBox()) {
+            if (results) {
+              pendingResults = null;
+              if (notice?.kind === "results") notice = null;
+            }
+          } else {
+            dbg("the text did not go into the input box");
+            given = undefined;
+            along.length = 0;
+            notice = { kind: "sendFailed", text: t("notInBox") };
+          }
           render();
         }
-        if (parts.length) page.insertAtStart(`${parts.join("\n\n")}\n\n`);
         page.expect(page.editorText(), given);
       } catch (err) {
         // the user's message goes out in any case, as they wrote it
@@ -291,7 +319,12 @@ export function startBridge(page: Page): () => void {
         if (await page.submit()) {
           lastGiven = given ?? lastGiven;
           flow = { stage: "sent", at: Date.now(), with: along, wroteAt: 0 };
-        } else page.unexpect();
+        } else if (alive()) {
+          page.unexpect();
+          // not again: what went in front is in the box already, and the user's next send goes as the page does it
+          passNext = true;
+          notice = { kind: "sendFailed", text: t("userSendFailed") };
+        }
       } finally {
         holding = false;
         render();
@@ -302,12 +335,15 @@ export function startBridge(page: Page): () => void {
   function onKeyDown(e: KeyboardEvent): void {
     // while picking, keys belong to the picker
     if (picker) return;
-    if (e.key !== "Enter" || e.shiftKey || e.isComposing || e.keyCode === 229 || !e.isTrusted) return;
+    if (e.key !== "Enter" || e.shiftKey || e.isComposing || e.keyCode === 229 || !e.isTrusted || fromUs(e)) return;
+    // Enter picks from a list the box opened (a mention, a command): that is not a send
+    const ed = editableOf(deepTarget(e));
+    if (ed && (ed.getAttribute("aria-expanded") === "true" || ed.getAttribute("aria-activedescendant"))) return;
     if (page.isSendKey(e)) onUserSend(e);
   }
 
   function onClick(e: MouseEvent): void {
-    if (!e.isTrusted || picker) return;
+    if (!e.isTrusted || picker || fromUs(e)) return;
     if (page.isStopClick(e)) {
       userStopped = true;
       if (flow) flow = { stage: "stopped", at: Date.now() };
@@ -322,6 +358,14 @@ export function startBridge(page: Page): () => void {
   function tick(): void {
     if (!alive()) return;
     if (page.address() !== lastAddress) onNavigate(lastAddress);
+    else if (navCheck) {
+      if (Date.now() > navCheck.until) navCheck = null;
+      else if (!page.sameConversation(navCheck.from)) {
+        dbg("another conversation after all");
+        navCheck = null;
+        leaveConversation();
+      }
+    }
     setTheme(pageIsDark());
     const finished = page.tick(active() && !learner, run !== null);
     if (flow?.stage === "sent" && page.progress()?.writing) flow.wroteAt = Date.now();
@@ -340,16 +384,22 @@ export function startBridge(page: Page): () => void {
       // a new chat got its address: its switch goes along
       if (sessionStorage.getItem(`gmb-off:${was}`) === "1") sessionStorage.setItem(`gmb-off:${page.chatKey()}`, "1");
       sessionStorage.removeItem(`gmb-off:${was}`);
-    } else {
-      // another conversation: nothing of this one goes there
-      run?.abort();
-      rounds = 0;
-      notice = null;
-      pendingResults = null;
-      flow = null;
-      page.otherConversation();
-      sessionStorage.removeItem("gmb-off:new");
-    }
+      // a page may change the address first and draw the other conversation a moment later
+      if (page.addressShared) navCheck = { from, until: Date.now() + NAV_RECHECK_MS };
+    } else leaveConversation();
+    render();
+  }
+
+  /** Another conversation: nothing of this one goes there. */
+  function leaveConversation(): void {
+    run?.abort();
+    rounds = 0;
+    notice = null;
+    pendingResults = null;
+    passNext = false;
+    flow = null;
+    page.otherConversation();
+    sessionStorage.removeItem("gmb-off:new");
     render();
   }
 
@@ -524,7 +574,15 @@ export function startBridge(page: Page): () => void {
     page.replaceText(text);
     rounds++;
     page.expect(text);
-    const ok = await page.submit();
+    // an Enter of the user's meanwhile would send a second time
+    holding = true;
+    let ok = false;
+    try {
+      ok = await page.submit();
+    } finally {
+      holding = false;
+    }
+    if (!alive()) return;
     dbg("results sent", ok);
     if (ok) flow = { stage: "sent", at: Date.now(), with: ["results"], wroteAt: 0 };
     else {
@@ -584,8 +642,7 @@ export function startBridge(page: Page): () => void {
     }
   }
 
-  function flowText(): string {
-    const v = flowView();
+  function flowText(v = flowView()): string {
     return v ? `${v.tone}|${v.text}|${v.notes?.join("|") ?? ""}|${v.actions?.map((a) => a.label).join("|") ?? ""}` : "";
   }
 
@@ -636,7 +693,7 @@ export function startBridge(page: Page): () => void {
     picker = new Picker(
       role,
       (el) => {
-        if (picking) picking.current = el ? describe(el).slice(0, 80) : "";
+        if (picking) picking.current = short(el);
         render();
       },
       (el) => {
@@ -679,7 +736,7 @@ export function startBridge(page: Page): () => void {
       kind: "results",
       saved: results.saved,
       message: results.message,
-      roles: results.roles.map((r) => ({ role: r.role, found: r.found, detail: r.el ? describe(r.el).slice(0, 80) : "", note: r.note })),
+      roles: results.roles.map((r) => ({ role: r.role, found: r.found, detail: short(r.el), note: r.note })),
     };
   }
 
@@ -687,14 +744,15 @@ export function startBridge(page: Page): () => void {
 
   function render(): void {
     if (stopped) return;
-    lastFlowText = flowText();
+    const flowNow = flowView();
+    lastFlowText = flowText(flowNow);
     pill.render({
       state,
       chatOn: chatOn(),
       notice,
       site: page.kind === "generic" ? { learned: layout?.at ?? null } : null,
       learn: learnBox(),
-      flow: flowView(),
+      flow: flowNow,
       avoid: () => inputAreaRects(learner?.inputArea() ?? page.inputArea()),
     });
   }
