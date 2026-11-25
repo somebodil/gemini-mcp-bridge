@@ -6,7 +6,8 @@ Gemini MCP Bridge is a Chrome extension. It collects no data for its developer a
 
 - **The chat page in the tabs where you turn it on.** The extension goes into a tab only when you click its icon there, and leaves when you click it again (or the tab goes to another site). In such a tab it reads the replies to find the tool calls in them, and reads the input box. It does not read other tabs or other sites.
 - **The page's structure, when you ask for it.** *Copy page structure* puts the names of the page's elements on your clipboard (no texts of the page). It goes nowhere unless you paste it somewhere.
-- **Its settings**, kept with `chrome.storage.local` in your browser: the addresses and tokens of your MCP servers, your choice for each tool (ask, auto, off), and the behavior options. It also keeps, for each conversation, a short hash of the tool list sent to it, so that the list is not sent twice, and (in the page's own storage) where you dragged the corner button.
+- **How a chat page is built, when you ask the extension to learn it.** *Learn this page* puts a test message into the input box, which you send yourself, and watches the page answer it. It keeps, for that site, how to find the input box, the buttons, the messages and the code blocks again: CSS selectors made of element names, classes and attributes, and the label of the button that shows the page is writing. No texts of the page or of your messages. The options page lists the learned sites and deletes them.
+- **Its settings**, kept with `chrome.storage.local` in your browser: the addresses and tokens of your MCP servers, your choice for each tool (ask, auto, off), and the behavior options, and what it learned about chat pages (above). It also keeps, for each conversation, a short hash of the tool list sent to it, so that the list is not sent twice, and (in the page's own storage) where you dragged the corner button.
 
 ## Where data goes
 

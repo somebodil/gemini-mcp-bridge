@@ -168,22 +168,28 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  * Clicks send once the button is ready; true when Gemini started writing or the box emptied.
  * Quill takes text written into the box into its model a moment later (through a MutationObserver), and Gemini
  * sends the model: a click in the same moment would send the box as it was before.
+ * A click Gemini did not take (a dialog came up over the page at that moment) is made again after a while: Gemini
+ * empties the box at once when it takes one.
  */
 async function submit(timeoutMs = 8000): Promise<boolean> {
   await sleep(300);
   const end = Date.now() + timeoutMs;
-  let clicked = false;
+  let clickedAt = 0;
+  let clicks = 0;
   while (Date.now() < end) {
-    if (clicked && (isGenerating() || editorText() === "")) return true;
+    if (clicks && (isGenerating() || editorText() === "")) return true;
     const b = sendButton();
-    if (b && !clicked) {
+    if (b && (!clicks || (clicks < 3 && Date.now() - clickedAt > RECLICK_MS))) {
       b.click();
-      clicked = true;
+      clickedAt = Date.now();
+      clicks++;
     }
     await sleep(100);
   }
-  return clicked && (isGenerating() || editorText() === "");
+  return clicks > 0 && (isGenerating() || editorText() === "");
 }
+
+const RECLICK_MS = 2500;
 
 // ---------------------------------------------------------------------------------------------------------
 // Watching the replies
@@ -287,6 +293,10 @@ export class GeminiPage implements Page {
 
   progress(): Progress | null {
     return this.prog;
+  }
+
+  inputArea(): Element[] {
+    return [editor(), document.querySelector(SEL.sendButton)].filter((e): e is Element => !!e);
   }
 
   tick(active: boolean, busy: boolean): Finished | null {

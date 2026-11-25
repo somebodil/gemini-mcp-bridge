@@ -12,7 +12,7 @@ import { layoutChange, loadLayout, saveLayout, type Layout, type Role } from "./
 import { checkLayout, Learner, outlineItems, withPicked, type RoleResult } from "./learn.ts";
 import { Overlay } from "./overlay.ts";
 import { Picker } from "./picker.ts";
-import { dbg, describe, pageStructure, type Finished, type Page } from "./page.ts";
+import { dbg, describe, inputAreaRects, pageStructure, type Finished, type Page } from "./page.ts";
 import { installPageStyle, pageIsDark, Pill, removePageStyle, setTheme, type FlowView, type LearnBox, type Notice, type Row } from "./ui.ts";
 
 /** Where the exchange that went out last stands, for the status line. */
@@ -688,7 +688,15 @@ export function startBridge(page: Page): () => void {
   function render(): void {
     if (stopped) return;
     lastFlowText = flowText();
-    pill.render({ state, chatOn: chatOn(), notice, site: page.kind === "generic" ? { learned: layout?.at ?? null } : null, learn: learnBox(), flow: flowView() });
+    pill.render({
+      state,
+      chatOn: chatOn(),
+      notice,
+      site: page.kind === "generic" ? { learned: layout?.at ?? null } : null,
+      learn: learnBox(),
+      flow: flowView(),
+      avoid: () => inputAreaRects(learner?.inputArea() ?? page.inputArea()),
+    });
   }
 
   function setLayout(l: Layout | null): void {

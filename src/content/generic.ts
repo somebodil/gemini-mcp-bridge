@@ -151,6 +151,13 @@ export class GenericPage implements Page {
     return this.prog;
   }
 
+  inputArea(): Element[] {
+    const ed = this.editor();
+    if (!ed) return [];
+    const send = resolve(this.layout?.send) ?? buttonNear(ed, SEND, STOP);
+    return send ? [ed, send] : [ed];
+  }
+
   /** The input box: the one the user wrote in last, else the learned one, else the last one on the page that one can write in. */
   private editor(): HTMLElement | null {
     if (this.ed?.isConnected) return this.ed;
@@ -212,6 +219,7 @@ export class GenericPage implements Page {
     const start = Date.now();
     let clickedAt = 0;
     let entered = false;
+    let reclicked = false;
     const went = () => valueOf(ed) === "" || this.isGenerating();
     while (Date.now() - start < timeoutMs) {
       if ((clickedAt || entered) && went()) return true;
@@ -221,6 +229,11 @@ export class GenericPage implements Page {
           b.click();
           clickedAt = Date.now();
         }
+      } else if (entered && !reclicked && Date.now() - clickedAt > 4000) {
+        // neither the click nor Enter was taken (a dialog came up over the page then): one more click
+        const b = this.sendButton(ed);
+        if (b) b.click();
+        reclicked = true;
       }
       // Enter when there is no send button, or when the click did nothing (the button is still there, ready):
       // never after a click the page took (it may clear the box only once its server answered)

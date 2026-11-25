@@ -75,9 +75,21 @@ async function waitLog(c: Chat, pattern: RegExp, timeout = 25_000): Promise<void
   }
 }
 
+/** The learning box (or another of the extension's boxes) covers neither the input box nor the send button. */
+async function clearOfComposer(page: Page, ours = box(page)): Promise<void> {
+  const a = await ours.boundingBox();
+  assert.ok(a);
+  for (const sel of [".composer .editor", ".composer .send"]) {
+    const b = await page.locator(sel).boundingBox();
+    assert.ok(b);
+    assert.ok(a.x + a.width <= b.x || b.x + b.width <= a.x || a.y + a.height <= b.y || b.y + b.height <= a.y, `box ${JSON.stringify(a)} covers ${sel} ${JSON.stringify(b)}`);
+  }
+}
+
 /** Learns the page, the test message sent with Enter, up to the list of what was learned. */
 async function learn(page: Page): Promise<void> {
   await startLearning(page);
+  await clearOfComposer(page);
   await page.locator(".editor").click();
   await page.waitForFunction(() => document.querySelector<HTMLElement>(".editor")?.innerText.includes("gmb_test"));
   await page.locator(".editor").press("Enter");
@@ -85,8 +97,10 @@ async function learn(page: Page): Promise<void> {
   // nothing showed that the page was writing: that step is passed over, with why
   const busyStep = page.locator('gmb-status .learn li[data-step="busy"]');
   assert.equal(await busyStep.getAttribute("class"), "skip", (await busyStep.textContent()) ?? "");
+  await clearOfComposer(page);
   await button(page, "Stop learning").click();
   await box(page).filter({ hasText: "What the extension learned" }).waitFor();
+  await clearOfComposer(page);
 }
 
 /** What each pattern matches on the page, as tag.classes[author]. */
@@ -129,9 +143,14 @@ describe("a chat page built otherwise", () => {
     try {
       await learn(c.page);
       await closeResults(c.page);
+      // the box one types in a little higher: the status line would open over its send button
+      await c.page.addStyleTag({ content: ".composer { bottom: 40px; }" });
       await c.page.locator(".editor").click();
       await c.page.keyboard.type("What is in my folder?");
       await c.page.keyboard.press("Enter");
+      const flow = c.page.locator("gmb-status .flow");
+      await flow.waitFor({ timeout: 10_000 });
+      await clearOfComposer(c.page, flow);
       await waitSent(c.page, 2);
       const first = (await sent(c.page))[1];
       assert.ok(first.startsWith(MARK.instructions) && first.endsWith("What is in my folder?"), first.slice(0, 80));

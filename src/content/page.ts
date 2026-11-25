@@ -77,6 +77,23 @@ export interface Page {
   progress(): Progress | null;
   /** What the extension learned about the site (pages it does not know). */
   useLayout?(layout: Layout | null): void;
+  /** The input box and the send button: the extension's boxes are not to cover them. */
+  inputArea(): Element[];
+}
+
+/** Where the page's input box and send button are, with what holds both (the box the user types in). */
+export function inputAreaRects(els: Element[]): DOMRect[] {
+  const out = els.map((e) => e.getBoundingClientRect()).filter((r) => r.width && r.height);
+  const ed = els[0];
+  if (!ed) return out;
+  let r = ed.getBoundingClientRect();
+  for (let el = parentOf(ed), i = 0; el && i < 8; el = parentOf(el), i++) {
+    const b = el.getBoundingClientRect();
+    if (b.height > Math.max(r.height + 150, 220) || b.width > innerWidth * 0.95) break;
+    r = b;
+  }
+  if (r.width && r.height) out.push(r);
+  return out;
 }
 
 /** With localStorage["gmb-debug"] = "1" on the page, the steps go to the console. */

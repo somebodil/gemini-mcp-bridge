@@ -262,6 +262,9 @@ label { display: flex; gap: 8px; align-items: center; cursor: pointer; }
 .stack { position: absolute; right: 0; bottom: 44px; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
 :host([data-down]) .stack { bottom: auto; top: 44px; flex-direction: column-reverse; }
 :host([data-left]) .stack { right: auto; left: 0; align-items: flex-start; }
+/* the learning box at the top, the table of parts below the list, so that the list stays put */
+:host([data-dock]) .stack { position: fixed; top: 16px; bottom: auto; right: 16px; left: auto; flex-direction: column-reverse; align-items: flex-end; }
+:host([data-dock="top-left"]) .stack { right: auto; left: 16px; align-items: flex-start; }
 .learn { width: 360px; max-width: calc(100vw - 32px); max-height: calc(100vh - 80px); overflow: auto; box-sizing: border-box;
   padding: 12px; border-radius: 12px; border: 1px solid var(--accent); background: var(--bg); box-shadow: 0 4px 16px rgba(0,0,0,.25);
   display: grid; gap: 8px; }
@@ -289,6 +292,10 @@ label { display: flex; gap: 8px; align-items: center; cursor: pointer; }
 .flow.warn { border-color: var(--warn); }
 :host([data-down]) .flow { bottom: auto; top: 44px; }
 :host([data-left]) .flow { right: auto; left: 0; }
+/* moved away from the page's input box (dodge): the status line and a notice beside the button, or at the top */
+:host([data-float="side"]) .flow, :host([data-float="side"]) .notice { bottom: 0; top: auto; right: calc(100% + 8px); left: auto; }
+:host([data-left][data-float="side"]) .flow, :host([data-left][data-float="side"]) .notice { right: auto; left: calc(100% + 8px); }
+:host([data-float="top"]) .flow, :host([data-float="top"]) .notice { position: fixed; top: 16px; bottom: auto; right: 16px; left: auto; }
 .flow .line { display: flex; align-items: center; gap: 6px; }
 .spin { display: inline-block; width: 9px; height: 9px; border: 2px solid var(--muted); border-top-color: transparent; border-radius: 50%;
   animation: spin 0.8s linear infinite; flex: none; }
@@ -304,6 +311,8 @@ interface PillView {
   site: { learned: number | null } | null;
   learn: LearnBox | null;
   flow: FlowView | null;
+  /** Where the page's input box and send button are: the learning box moves away from them. */
+  avoid?: () => DOMRect[];
 }
 
 const POS_KEY = "gmb-pill-pos";
@@ -413,6 +422,31 @@ export class Pill {
     else if (this.open) children.push(this.panel(state, chatOn, site));
     else if (flow) children.push(this.flowBox(flow));
     this.root.replaceChildren(...children);
+    if (!this.open) this.dodge(view.avoid);
+  }
+
+  /**
+   * The boxes open by the button, where pages put their send button. One that would cover the input box or the
+   * send button moves: the learning box (the user is to press them while it learns) to the top of the screen; the
+   * status line and a notice (the results may wait in the input box) beside the button, else to the top.
+   */
+  private dodge(where: PillView["avoid"]): void {
+    this.host.removeAttribute("data-dock");
+    this.host.removeAttribute("data-float");
+    const stack = this.root.querySelector(".stack");
+    const box = stack ?? this.root.querySelector(".flow, .notice");
+    const avoid = box && where ? where() : [];
+    if (!box || !avoid.length) return;
+    // an edge over a frame is not covering it
+    const covers = () => {
+      const r = box.getBoundingClientRect();
+      return avoid.some((a) => Math.min(r.right, a.right) - Math.max(r.left, a.left) > 8 && Math.min(r.bottom, a.bottom) - Math.max(r.top, a.top) > 8);
+    };
+    const [attr, places] = stack ? ["data-dock", ["top", "top-left"]] : ["data-float", ["side", "top"]];
+    for (const place of places) {
+      if (!covers()) return;
+      this.host.setAttribute(attr, place);
+    }
   }
 
   private noticeBox(n: Notice): HTMLElement {

@@ -220,6 +220,14 @@ export class Learner {
     return el instanceof HTMLElement ? el : null;
   }
 
+  /** The input box the user chose, with the button that sent the test message; null before one was chosen. */
+  inputArea(): Element[] | null {
+    const box = this.inputNow();
+    if (!box) return null;
+    const b = this.attempt?.button ?? this.sent?.button;
+    return b?.isConnected ? [box, b] : [box];
+  }
+
   private holdsMessage(): boolean {
     const box = this.inputNow();
     return !!box && valueOf(box).includes(this.nonce);
@@ -253,7 +261,10 @@ export class Learner {
     const looks = new Map<string, string>();
     const box = this.inputNow();
     if (box) {
-      for (const b of buttonsNear(box)) {
+      // the button the user sent with, also when it is farther from the box than the others looked at
+      const pressed = (this.sent ?? this.attempt)?.button;
+      const near = buttonsNear(box);
+      for (const b of pressed && !near.includes(pressed) ? [...near, pressed] : near) {
         const loc = locatorOf(b);
         const key = loc.join(" | ");
         this.locators.set(key, loc);

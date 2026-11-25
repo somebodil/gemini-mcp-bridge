@@ -94,19 +94,32 @@ Open [Gemini](https://gemini.google.com/app) and click the extension's icon: **O
 - The button in the corner shows the state (*MCP · 4 tools*). Click it to see the servers, to turn the tools off for this chat, or to turn the extension off in this tab. Drag it elsewhere if it covers something; it keeps the place for the site.
 - The extension stays on in the tab when you reload the page. It goes off when you click the icon again, when the tab goes to another site, or when you close the tab. Other tabs are not touched.
 - Each call gets a card under it. Press **Run** to run it, **Always allow** to let that tool run without asking from now on, or **Deny**.
+- While a message is on its way, a line above the corner button says where it is: the page is writing the reply, the reply has calls, waiting for your **Run**, running, sending the results, done. A smaller line says what went along with your message (the tool instructions, the results). When no reply is found, the line says so, and what you can do.
 
 ![A call waiting for Run](store/images/screenshot-1-ask.png)
 
 ### Other chat pages (Gemini Enterprise and others)
 
-On a page other than gemini.google.com, for example Gemini Enterprise (`vertexaisearch.cloud.google.com`), the extension runs in **generic mode**: it does not know the page, so it finds what it needs by itself.
+On a page other than gemini.google.com, for example Gemini Enterprise (`vertexaisearch.cloud.google.com`), the extension runs in **generic mode**. It does not know the page: it learns it from one test message, or it guesses.
 
-- The input box is the box you type in. The send and stop buttons are found by their names (*Send*, *Submit*, *Stop*, *보내기*, *중지*).
-- A tool call is a code block that appears after your message went out (also inside web components). Blocks that were on the page before, or that are part of your own message, never run.
+**Learn the page** (once per site). Click the corner button, then **Learn this page**:
+
+1. Click the input box: a test message goes in. It asks for one short JSON code block back.
+2. Send it, with the send button or Enter. Meanwhile the extension only watches: nothing goes along with the message, and no tool runs.
+3. A list of steps fills in as the extension sees each part: the input box, the send button, what shows that the page is writing (most often a stop button), your message, the reply, and the code block in it. When everything was seen, press **Stop learning**.
+4. The extension lists what it learned and outlines each part on the page: ✓ sure, ? a guess, ✗ not found. If a part is wrong, press **Pick** beside it and click the right element on the page: ↑ goes one layer out, ↓ back in, Enter picks, Esc cancels. The **?** beside it shows a table of what to pick for each part. Or press **Learn again**.
+
+What it learned is kept for the site (its address without the path) and used in every tab of it. The options page lists the learned sites; delete one to go back to guessing there.
+
+**Not learned,** the extension guesses: the input box is the box you type in, the send and stop buttons are found by their names (*Send*, *Submit*, *Stop*, *보내기*, *중지*), and a tool call is a code block that appears after your message went out (also inside web components).
+
+Either way:
+
+- Code blocks that were on the page before, or that are part of your own message, never run.
 - The instructions are sent again when they are not on the page, for example in a new chat at the same address.
-- There are no chips: the instructions and results stay visible as Gemini shows them.
+- There are no chips: the instructions and results stay visible as the page shows them.
 
-If it does not work on a page (nothing is sent, or a call is not seen), click the corner button, then **Copy page structure**, and paste it into an [issue](https://github.com/somebodil/gemini-mcp-bridge/issues). It holds the page's element names, classes and labels, and the length of texts, but none of the texts themselves. Look it over before you post it: labels can hold the titles of your chats.
+If it does not work on a page even after learning, click the corner button, then **Copy page structure**, and paste it into an [issue](https://github.com/somebodil/gemini-mcp-bridge/issues). It holds the page's element names, classes and labels, and the length of texts, but none of the texts themselves. Look it over before you post it: labels can hold the titles of your chats.
 
 ## Update
 
@@ -133,7 +146,8 @@ Your settings stay. The server updates the same way it was installed: `npx` take
 | *Only 127.0.0.1 and localhost addresses can be reached* | The extension talks only to servers on your own computer. |
 | No corner button on the page | The extension is off in this tab: click its icon (it shows **ON** when on). After an update of the extension, every tab starts off. |
 | The icon does nothing on a page | Chrome does not let extensions into some pages (`chrome://` pages, the Chrome Web Store). |
-| On a page other than gemini.google.com, nothing happens | See [Other chat pages](#other-chat-pages-gemini-enterprise-and-others): copy the page structure and open an issue. |
+| On a page other than gemini.google.com, nothing happens | Learn the page: corner button, then **Learn this page** (see [Other chat pages](#other-chat-pages-gemini-enterprise-and-others)). If it still does not work, copy the page structure and open an issue. |
+| *No reply found yet* on a learned page | The page changed since it was learned: press **Learn again** on that line. |
 | Gemini says it cannot access your computer | Start a new chat: the instructions go with the first message of a chat. Check that the corner button is there and shows tools, and not *Off*. |
 | Gemini writes a call, but nothing happens | Look at the card under it: it may be waiting for **Run**. A call in a chat opened from the history never runs: only replies written while the page is open do. |
 | The extension disappeared after Chrome restarted | Its folder was moved or deleted: unzip it again and **Load unpacked** again. |
@@ -159,11 +173,12 @@ Read this before you allow a tool to run by itself.
     - How many automatic rounds before a pause.
     - How many characters of output go into one message (20,000 by default).
     - The time limit of a call.
+- **Learned pages:** the chat pages learned in generic mode, each with when it was learned and which parts were found or picked by hand. Delete one to go back to guessing on it.
 
 ## Limits
 
 - The extension reads and writes Gemini's page, which Google can change at any time. When Gemini changes its page, the extension may stop working until it is updated. All of what it relies on is in [`src/content/gemini.ts`](src/content/gemini.ts); for other pages, in [`src/content/generic.ts`](src/content/generic.ts).
-- Generic mode guesses. A page whose send button has no name, or that shows code blocks in something other than `<pre>` or `<code>`, needs the page structure to be supported.
+- Generic mode without learning guesses: a page whose send button has no name, or that shows code blocks in something other than `<pre>` or `<code>`, needs to be learned. A learned page that changes how it looks needs to be learned again; the status line says so when it finds no reply. How a page is learned is in [`src/content/learn.ts`](src/content/learn.ts) and [`src/content/layout.ts`](src/content/layout.ts).
 - Gemini follows the protocol well, but it is a protocol in text: now and then Gemini writes a call in the wrong shape, or forgets the instructions in a very long conversation. A call it cannot read gets an error back, so that Gemini can write it again. When the tool list changes, the next message carries the new list.
 - Images, audio and other binary output of tools reach Gemini only as a short note (`[image: image/png, 120 KB, not shown]`).
 - Only Chrome. Only the top frame of a page (not a chat inside an iframe).
@@ -178,8 +193,8 @@ The extension sends nothing to its developer or to anyone else: see [PRIVACY.md]
 npm install
 npm run check     # types, lint, unit tests (the MCP client against servers made with the official SDK)
 npm run build     # dist/extension: load it with "Load unpacked"
-npm run e2e       # a test build in Chromium against a mock of Gemini's page and a mock of another chat page
-npm run e2e:live  # against the real gemini.google.com, signed out
+npm run e2e       # a test build in Chromium against a mock of Gemini's page and two mocks of other chat pages, built unlike each other
+npm run e2e:live  # against the real gemini.google.com, signed out (also as an unknown page, learned first)
 node e2e/obey.ts  # how often each Gemini model follows the instructions (after changing their wording)
 ```
 

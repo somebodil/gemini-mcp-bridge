@@ -27,6 +27,8 @@ HOW IT WORKS
 • The first message of a conversation carries instructions and the list of your tools; on the page they fold into a small chip.
 • Gemini answers with a tool call. A card under it shows the tool and its arguments.
 • Press Run, and the call goes to the MCP server on your computer. The result is sent back to Gemini, which continues.
+• A line by the extension's button says where each message is: being written, waiting for your Run, running, sending the results, done.
+• On other chat pages, the extension learns the page from one test message you send, and you can point out a part it got wrong.
 
 YOU STAY IN CONTROL
 • Every call waits for your Run, unless you allowed that tool to run by itself.
@@ -56,6 +58,8 @@ Gemini MCP Bridge는 웹의 Gemini(gemini.google.com, Gemini Enterprise, 다른 
 • 대화의 첫 메시지에 지침과 도구 목록이 함께 가고, 페이지에서는 작은 칩으로 접힙니다.
 • Gemini가 도구 호출로 답하면, 그 아래 카드에 도구와 인자가 보입니다.
 • 실행을 누르면 호출이 내 컴퓨터의 MCP 서버로 가고, 결과가 Gemini에게 돌아가 대화가 이어집니다.
+• 확장 버튼 옆의 한 줄이 메시지마다 어디쯤인지 알려 줍니다: 답을 쓰는 중, 실행을 기다리는 중, 실행 중, 결과를 보내는 중, 끝.
+• 다른 채팅 페이지에서는 내가 보내는 시험 메시지 하나로 페이지를 학습하고, 잘못 배운 부분은 직접 골라 줄 수 있습니다.
 
 내가 정합니다
 • 스스로 실행하게 허용한 도구가 아니면, 모든 호출은 실행을 누를 때까지 기다립니다.
@@ -79,7 +83,7 @@ Gemini MCP Bridge는 웹의 Gemini(gemini.google.com, Gemini Enterprise, 다른 
 
 **Permission justifications:**
 
-- `storage`: keeps the user's settings (MCP server addresses and tokens, the choice for each tool) and, per conversation, a hash of the tool list already sent.
+- `storage`: keeps the user's settings (MCP server addresses and tokens, the choice for each tool), per conversation a hash of the tool list already sent, and, for chat pages the user asked the extension to learn, CSS selectors to find their input box, buttons and messages again.
 - Host permissions `http://127.0.0.1/*`, `http://localhost/*`: the extension sends the tool calls to MCP servers on the user's own computer, at the addresses the user enters. No other host.
 - `activeTab` and `scripting`: when the user clicks the extension's icon in a tab, the page script goes into that tab only. It reads the replies to find tool calls, shows the approval cards, and types the results into the input box. No site is reached without that click; there are no content scripts declared for any site.
 
