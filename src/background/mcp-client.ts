@@ -5,12 +5,13 @@
 // tools/call, which this file does by the specification (2025-06-18): every message is a POST, the answer is
 // JSON or an SSE stream, the server may give a session id that later requests carry.
 
+import pkg from "../../package.json" with { type: "json" };
 import type { ToolInfo } from "../shared/protocol.ts";
 
-export const CLIENT_INFO = { name: "gemini-mcp-bridge", version: "0.1.0" };
+const CLIENT_INFO = { name: "gemini-mcp-bridge", version: pkg.version };
 const PROTOCOL_VERSION = "2025-06-18";
 
-export interface McpContent {
+interface McpContent {
   type: string;
   text?: string;
   data?: string;
@@ -26,11 +27,10 @@ export interface CallToolResult {
   isError?: boolean;
 }
 
-export interface InitializeResult {
+interface InitializeResult {
   protocolVersion: string;
   serverInfo?: { name?: string; version?: string };
   instructions?: string;
-  capabilities?: Record<string, unknown>;
 }
 
 interface JsonRpcMessage {
@@ -52,7 +52,7 @@ export class McpError extends Error {
   }
 }
 
-export interface McpClientOptions {
+interface McpClientOptions {
   url: string;
   headers?: Record<string, string>;
   fetch?: typeof fetch;
@@ -159,7 +159,8 @@ export class McpClient {
   private async request(method: string, params: unknown, timeoutMs: number, signal?: AbortSignal): Promise<unknown> {
     if (signal?.aborted) throw new McpError("network", "Cancelled.");
     const id = this.nextId++;
-    // tell the server, so that it stops the work (a server without sessions stops when the connection closes)
+    // when the caller cancels, tell the server, so that it stops the work (a server without sessions stops
+    // anyway when the connection closes, which a timeout does too)
     const onAbort = () => void this.notify("notifications/cancelled", { requestId: id, reason: "The user's page went away or the call timed out." }).catch(() => undefined);
     signal?.addEventListener("abort", onAbort, { once: true });
     try {
@@ -210,7 +211,7 @@ export class McpClient {
       if (ctrl.signal.reason instanceof McpError) throw ctrl.signal.reason;
       throw new McpError("network", `Cannot reach ${this.url} (${e instanceof Error ? e.message : String(e)}). Is the local server running?`);
     }
-    if (!res.ok && res.status !== 202) {
+    if (!res.ok) {
       done();
       const text = (await res.text().catch(() => "")).slice(0, 300);
       const hint = res.status === 401 || res.status === 403 ? " Check the token in the extension's options." : "";

@@ -49,11 +49,15 @@
         sb.classList.replace("submit", "stop");
         const reply = window.__replies.shift() ?? "Nothing more to say.";
         const chatNow = window.__chatGen;
-        setTimeout(() => {
+        const finish = () => {
+          if (!sb.classList.contains("stop")) return;
           sb.classList.replace("stop", "submit");
           // the user went to another chat meanwhile: the reply belongs to the old one
           if (chatNow === window.__chatGen) addResponse(reply);
-        }, window.__delay ?? 500);
+        };
+        // Stop ends the reply at once, with what was written so far
+        window.__stop = finish;
+        setTimeout(finish, window.__delay ?? 500);
       }
       window.__chatGen = 0;
       // like opening another conversation from the sidebar: other address, other messages
@@ -70,7 +74,8 @@
         }
       });
       sb.querySelector("button").addEventListener("click", () => {
-        if (!sb.classList.contains("stop")) send();
+        if (sb.classList.contains("stop")) window.__stop?.();
+        else send();
       });
 
       function addQuery(text) {

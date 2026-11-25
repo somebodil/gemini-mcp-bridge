@@ -13,7 +13,8 @@ export const TOKEN = "e2e-token-0123456789abcdef";
 
 export interface Harness {
   context: BrowserContext;
-  worker: Worker;
+  /** The extension's service worker as it is now (a reload of the extension starts a new one). */
+  readonly worker: Worker;
   url: string;
   dir: string;
   /** Tools the test server ran, in order. */
@@ -34,7 +35,8 @@ export async function startHarness(opts: { headless?: boolean; locale?: string }
     locale: opts.locale ?? "en-US",
     args: [`--disable-extensions-except=${EXTENSION}`, `--load-extension=${EXTENSION}`, `--lang=${opts.locale ?? "en-US"}`],
   });
-  const worker = context.serviceWorkers()[0] ?? (await context.waitForEvent("serviceworker"));
+  const first = context.serviceWorkers()[0] ?? (await context.waitForEvent("serviceworker"));
+  const current = () => context.serviceWorkers().at(-1) ?? first;
   // the options page opens by itself after the install
   for (const p of context.pages()) if (p.url().startsWith("chrome-extension://")) await p.close();
   context.on("page", (p) => {
@@ -42,12 +44,14 @@ export async function startHarness(opts: { headless?: boolean; locale?: string }
   });
   const setSettings = async (s: Partial<Settings>) => {
     const settings: Settings = { ...DEFAULT_SETTINGS, servers: [{ id: "local", name: "local", url, token: TOKEN, enabled: true }], ...s };
-    await worker.evaluate((v) => chrome.storage.local.set({ settings: v }), settings);
+    await current().evaluate((v) => chrome.storage.local.set({ settings: v }), settings);
   };
   await setSettings({});
   return {
     context,
-    worker,
+    get worker() {
+      return current();
+    },
     url,
     dir,
     calls: server.calls,

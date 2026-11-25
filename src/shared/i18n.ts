@@ -55,13 +55,11 @@ const en = {
   optOff: "Off",
   optNoTools: "No tools: connect a server first.",
   optBehavior: "Behavior",
-  optAutoRunAll: "Run every tool without asking (only for servers you trust completely)",
   optAutoSend: "Send tool results to Gemini by itself",
   optMaxRounds: "Pause after this many automatic rounds",
   optMaxChars: "Characters of tool output per message",
   optTimeout: "Time limit of a tool call (seconds)",
   optSaved: "Saved",
-  popupOpenGemini: "Open Gemini",
 } as const;
 
 type Key = keyof typeof en;
@@ -120,13 +118,11 @@ const ko: Record<Key, string> = {
   optOff: "끄기",
   optNoTools: "도구가 없습니다. 먼저 서버를 연결하세요.",
   optBehavior: "동작",
-  optAutoRunAll: "모든 도구를 묻지 않고 실행 (완전히 믿는 서버에서만)",
   optAutoSend: "도구 결과를 Gemini에 자동으로 보내기",
   optMaxRounds: "자동으로 이만큼 주고받으면 멈춤",
   optMaxChars: "메시지 하나에 넣는 도구 출력의 글자 수",
   optTimeout: "도구 호출 시간 제한 (초)",
   optSaved: "저장됨",
-  popupOpenGemini: "Gemini 열기",
 };
 
 function lang(): string {

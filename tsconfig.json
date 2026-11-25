@@ -21,11 +21,13 @@
     "erasableSyntaxOnly": true,
     "allowImportingTsExtensions": true,
     "skipLibCheck": true,
-    "noEmit": true
+    "noEmit": true,
+    "resolveJsonModule": true
   },
   "include": [
     "src",
     "e2e",
-    "store"
+    "store",
+    "package.json"
   ]
 }

@@ -3,20 +3,21 @@
 // element names and test ids.
 
 export const SEL = {
-  editor: "rich-textarea .ql-editor[contenteditable='true'], rich-textarea [contenteditable='true']",
+  editor: "rich-textarea .ql-editor",
   /** The send button's wrapper carries `submit` when it sends and `stop` while Gemini writes. */
   sendWrapper: ".send-button",
   sendButton: ".send-button button, [data-test-id='send-button-container'] button",
   response: "model-response",
   responseContent: "message-content",
   codeBlock: "code-block",
-  code: "code[data-test-id='code-content'], pre code, code",
+  /** Code of code blocks only: inline code in a sentence is not a call block (the plain-text search covers it). */
+  code: "code[data-test-id='code-content'], pre code",
   query: "user-query",
   queryText: ".query-text",
   queryLine: ".query-text-line",
 } as const;
 
-export function editor(): HTMLElement | null {
+function editor(): HTMLElement | null {
   return document.querySelector<HTMLElement>(SEL.editor);
 }
 
@@ -37,7 +38,7 @@ export function isGenerating(): boolean {
 }
 
 /** The send button, only while it sends (not while it is the stop button). */
-export function sendButton(): HTMLButtonElement | null {
+function sendButton(): HTMLButtonElement | null {
   if (isGenerating()) return null;
   const b = document.querySelector<HTMLButtonElement>(SEL.sendButton);
   if (!b || b.disabled || b.getAttribute("aria-disabled") === "true") return null;
@@ -70,11 +71,17 @@ export function responseId(el: HTMLElement, index: number): string {
   return m ? m[0] : `${location.pathname}#${index}`;
 }
 
+/** The reply as the user reads it (innerText forces a layout: only when it is needed). */
 export function responseText(el: HTMLElement): string {
   return (el.querySelector<HTMLElement>(SEL.responseContent) ?? el).innerText;
 }
 
-export interface Block {
+/** Cheap: to notice that a reply is still being written. */
+export function responseRaw(el: HTMLElement): string {
+  return el.textContent ?? "";
+}
+
+interface Block {
   /** The element after which the extension puts its card. */
   anchor: HTMLElement;
   text: string;

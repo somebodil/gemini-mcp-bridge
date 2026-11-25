@@ -1,20 +1,18 @@
 // The options page: servers, tool policies, behavior. Every change is saved at once, into the settings as they
-// are stored then: the popup or "Always allow" on Gemini's page may have changed others meanwhile.
+// are stored then: "Always allow" on Gemini's page may have changed others meanwhile.
 
-import { isLocalUrl, loadSettings, saveSettings, type BridgeState, type Policy, type Request, type ServerConfig, type Settings } from "../shared/config.ts";
+import { DEFAULT_URL, isLocalUrl, loadSettings, updateSettings, type BridgeState, type Policy, type Request, type ServerConfig, type Settings } from "../shared/config.ts";
+import { h } from "../shared/dom.ts";
 import { t } from "../shared/i18n.ts";
-import { h } from "../content/ui.ts";
 
 let settings: Settings;
 let state: BridgeState | undefined;
 const app = document.getElementById("app") as HTMLElement;
+/** Repaints the status line of each server once the service worker answered. */
+const painters: (() => void)[] = [];
 
-/** Applies one change to the stored settings (read again first) and keeps the page's copy in step. */
 async function update(change: (s: Settings) => void): Promise<void> {
-  const fresh = await loadSettings();
-  change(fresh);
-  await saveSettings(fresh);
-  settings = fresh;
+  settings = await updateSettings(change);
   const s = document.getElementById("saved");
   if (s) {
     s.textContent = t("optSaved");
@@ -23,7 +21,10 @@ async function update(change: (s: Settings) => void): Promise<void> {
 }
 
 async function loadState(refresh: boolean): Promise<void> {
-  state = await chrome.runtime.sendMessage<Request, BridgeState>({ type: "getState", refresh });
+  const got = await chrome.runtime.sendMessage<Request, (BridgeState & { error?: string }) | undefined>({ type: "getState", refresh }).catch(() => undefined);
+  state = got && !got.error ? got : undefined;
+  for (const paint of painters) paint();
+  renderTools();
 }
 
 function checkbox(checked: boolean, onChange: (v: boolean) => void): HTMLInputElement {
@@ -33,13 +34,23 @@ function checkbox(checked: boolean, onChange: (v: boolean) => void): HTMLInputEl
   return c;
 }
 
-function numberInput(value: number, min: number, max: number, onChange: (v: number) => void): HTMLInputElement {
-  const i = h("input", { type: "number", min: String(min), max: String(max), value: String(value) });
-  i.addEventListener("change", () => {
-    const v = Number(i.value);
-    if (Number.isFinite(v)) onChange(v);
+/** One behavior setting: a switch or a number, saved on change; a number shows the value it was saved as. */
+function settingRow(key: "autoSend" | "maxRounds" | "maxResultChars" | "callTimeoutSec", label: string): HTMLElement {
+  if (key === "autoSend") {
+    return h(
+      "label",
+      { class: "line" },
+      checkbox(settings.autoSend, (v) => void update((s) => void (s.autoSend = v))),
+      label,
+    );
+  }
+  const input = h("input", { type: "number", value: String(settings[key]) });
+  input.addEventListener("change", () => {
+    const v = Number(input.value);
+    if (!Number.isFinite(v)) return;
+    void update((s) => void (s[key] = v)).then(() => (input.value = String(settings[key])));
   });
-  return i;
+  return h("label", { class: "line" }, input, label);
 }
 
 function serverRow(s: ServerConfig): HTMLElement {
@@ -57,14 +68,16 @@ function serverRow(s: ServerConfig): HTMLElement {
             ? t("statusOff")
             : t("statusConnecting");
   };
+  painters.push(paint);
   paint();
   const name = h("input", { type: "text", value: s.name, "aria-label": t("optName"), class: "name" });
-  const url = h("input", { type: "url", value: s.url, "aria-label": t("optUrl"), class: "url", placeholder: "http://127.0.0.1:7341/mcp" });
+  const url = h("input", { type: "url", value: s.url, "aria-label": t("optUrl"), class: "url", placeholder: DEFAULT_URL });
   const token = h("input", { type: "password", value: s.token, "aria-label": t("optToken"), class: "token", placeholder: t("optToken"), autocomplete: "off" });
   const warn = h("div", { class: "err small" });
   const commit = async () => {
-    warn.textContent = isLocalUrl(url.value) ? "" : t("optOnlyLocal");
-    if (!isLocalUrl(url.value)) return;
+    const local = isLocalUrl(url.value);
+    warn.textContent = local ? "" : t("optOnlyLocal");
+    if (!local) return;
     await update((f) => {
       const x = f.servers.find((y) => y.id === s.id);
       if (x) Object.assign(x, { name: name.value.trim() || x.name, url: url.value.trim(), token: token.value.trim() });
@@ -82,8 +95,6 @@ function serverRow(s: ServerConfig): HTMLElement {
     await commit();
     status.textContent = t("statusConnecting");
     await loadState(true);
-    paint();
-    renderTools();
   });
   const remove = h("button", {}, t("optRemove"));
   remove.addEventListener("click", async () => {
@@ -92,14 +103,7 @@ function serverRow(s: ServerConfig): HTMLElement {
     });
     render();
   });
-  return h(
-    "div",
-    { class: "server" },
-    h("div", { class: "line" }, enabled, name, url),
-    h("div", { class: "line" }, token, test, remove),
-    warn,
-    status,
-  );
+  return h("div", { class: "server" }, h("div", { class: "line" }, enabled, name, url), h("div", { class: "line" }, token, test, remove), warn, status);
 }
 
 function renderTools(): void {
@@ -121,21 +125,18 @@ function renderTools(): void {
       if ((settings.policies[tool.name] ?? "ask") === v) o.selected = true;
       select.append(o);
     }
-    select.addEventListener("change", () => {
-      void update((f) => {
-        f.policies[tool.name] = select.value as Policy;
-      });
-    });
+    select.addEventListener("change", () => void update((s) => void (s.policies[tool.name] = select.value as Policy)));
     return h("tr", {}, h("td", { class: "mono" }, tool.name), h("td", {}, select), h("td", { class: "muted small" }, (tool.description ?? "").slice(0, 200)));
   });
   box.replaceChildren(h("table", {}, h("tbody", {}, ...rows)));
 }
 
 function render(): void {
+  painters.length = 0;
   const addServer = h("button", {}, t("optAdd"));
   addServer.addEventListener("click", async () => {
     await update((f) => {
-      f.servers.push({ id: `s${Date.now().toString(36)}`, name: `server${f.servers.length + 1}`, url: "http://127.0.0.1:7341/mcp", token: "", enabled: true });
+      f.servers.push({ id: `s${Date.now().toString(36)}`, name: `server${f.servers.length + 1}`, url: DEFAULT_URL, token: "", enabled: true });
     });
     render();
   });
@@ -144,11 +145,7 @@ function render(): void {
     h(
       "label",
       { class: "line big" },
-      checkbox(settings.enabled, (v) => {
-        void update((f) => {
-          f.enabled = v;
-        });
-      }),
+      checkbox(settings.enabled, (v) => void update((s) => void (s.enabled = v))),
       t("optEnabled"),
     ),
     h("h2", {}, t("optServers")),
@@ -159,56 +156,10 @@ function render(): void {
     h("p", { class: "muted small" }, t("optToolsHelp")),
     h("div", { id: "tools" }),
     h("h2", {}, t("optBehavior")),
-    h(
-      "label",
-      { class: "line" },
-      checkbox(settings.autoRunAll, (v) => {
-        void update((f) => {
-          f.autoRunAll = v;
-        });
-      }),
-      t("optAutoRunAll"),
-    ),
-    h(
-      "label",
-      { class: "line" },
-      checkbox(settings.autoSend, (v) => {
-        void update((f) => {
-          f.autoSend = v;
-        });
-      }),
-      t("optAutoSend"),
-    ),
-    h(
-      "label",
-      { class: "line" },
-      numberInput(settings.maxRounds, 1, 200, (v) => {
-        void update((f) => {
-          f.maxRounds = v;
-        });
-      }),
-      t("optMaxRounds"),
-    ),
-    h(
-      "label",
-      { class: "line" },
-      numberInput(settings.maxResultChars, 1000, 200000, (v) => {
-        void update((f) => {
-          f.maxResultChars = v;
-        });
-      }),
-      t("optMaxChars"),
-    ),
-    h(
-      "label",
-      { class: "line" },
-      numberInput(settings.callTimeoutSec, 5, 3600, (v) => {
-        void update((f) => {
-          f.callTimeoutSec = v;
-        });
-      }),
-      t("optTimeout"),
-    ),
+    settingRow("autoSend", t("optAutoSend")),
+    settingRow("maxRounds", t("optMaxRounds")),
+    settingRow("maxResultChars", t("optMaxChars")),
+    settingRow("callTimeoutSec", t("optTimeout")),
   );
   renderTools();
 }
@@ -226,7 +177,6 @@ async function main(): Promise<void> {
     });
   });
   await loadState(false);
-  render();
 }
 
 void main();

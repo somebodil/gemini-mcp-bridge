@@ -13,29 +13,30 @@ export interface ServerConfig {
   enabled: boolean;
 }
 
-export interface Settings {
-  enabled: boolean;
-  servers: ServerConfig[];
-  /** Per exposed tool name. A tool without an entry is asked about. */
-  policies: Record<string, Policy>;
-  /** Run every tool without asking. */
-  autoRunAll: boolean;
+/** What the page of Gemini needs of the settings. */
+export interface Behavior {
   /** Send the results to Gemini by itself; off: the results wait in the input box for the user to send. */
   autoSend: boolean;
   /** Results sent by the extension in a row, without a message of the user, before it pauses. */
   maxRounds: number;
   /** Characters of tool output per results message. */
   maxResultChars: number;
+}
+
+export interface Settings extends Behavior {
+  enabled: boolean;
+  servers: ServerConfig[];
+  /** Per exposed tool name. A tool without an entry is asked about. */
+  policies: Record<string, Policy>;
   callTimeoutSec: number;
 }
 
-export const DEFAULT_PORT = 7341;
+export const DEFAULT_URL = "http://127.0.0.1:7341/mcp";
 
 export const DEFAULT_SETTINGS: Settings = {
   enabled: true,
-  servers: [{ id: "local", name: "local", url: `http://127.0.0.1:${DEFAULT_PORT}/mcp`, token: "", enabled: true }],
+  servers: [{ id: "local", name: "local", url: DEFAULT_URL, token: "", enabled: true }],
   policies: {},
-  autoRunAll: false,
   autoSend: true,
   maxRounds: 20,
   maxResultChars: 20000,
@@ -53,9 +54,21 @@ export async function saveSettings(s: Settings): Promise<void> {
   await chrome.storage.local.set({ [KEY]: normalizeSettings(s) });
 }
 
+/** Applies one change to the settings as they are stored now (others may have changed them meanwhile). */
+export async function updateSettings(change: (s: Settings) => void): Promise<Settings> {
+  const fresh = await loadSettings();
+  change(fresh);
+  await saveSettings(fresh);
+  return normalizeSettings(fresh);
+}
+
+const POLICIES = new Set<unknown>(["ask", "auto", "off"]);
+
 export function normalizeSettings(got: Partial<Settings> | undefined): Settings {
   const s = { ...DEFAULT_SETTINGS, ...(got ?? {}) };
   const num = (v: unknown, d: number, min: number, max: number) => (typeof v === "number" && Number.isFinite(v) ? Math.min(max, Math.max(min, Math.round(v))) : d);
+  const policies: Record<string, Policy> = {};
+  if (typeof s.policies === "object" && s.policies) for (const [k, v] of Object.entries(s.policies)) if (POLICIES.has(v)) policies[k] = v;
   return {
     enabled: s.enabled !== false,
     servers: Array.isArray(s.servers)
@@ -69,8 +82,7 @@ export function normalizeSettings(got: Partial<Settings> | undefined): Settings 
             enabled: x.enabled !== false,
           }))
       : DEFAULT_SETTINGS.servers,
-    policies: typeof s.policies === "object" && s.policies ? s.policies : {},
-    autoRunAll: s.autoRunAll === true,
+    policies,
     autoSend: s.autoSend !== false,
     maxRounds: num(s.maxRounds, DEFAULT_SETTINGS.maxRounds, 1, 200),
     maxResultChars: num(s.maxResultChars, DEFAULT_SETTINGS.maxResultChars, 1000, 200000),
@@ -91,13 +103,11 @@ export function isLocalUrl(url: string): boolean {
 // ---------------------------------------------------------------------------------------------------------
 // State the service worker reports
 
-export type ServerStatus = "off" | "connecting" | "ok" | "error";
-
 export interface ServerState {
   id: string;
   name: string;
   url: string;
-  status: ServerStatus;
+  status: "off" | "connecting" | "ok" | "error";
   error?: string;
   toolCount: number;
   serverName?: string;
@@ -112,28 +122,24 @@ export interface ExposedTool extends ToolInfo {
 
 export interface BridgeState {
   enabled: boolean;
-  /** The settings without the servers' tokens, which the page has no use for. */
   servers: ServerState[];
   /** Tools Gemini is told about: those not turned off. */
   tools: ExposedTool[];
   /** Tools turned off in the options, listed there so that they can be turned on again. */
   hiddenTools: ExposedTool[];
   notes: string[];
-  settings: Settings;
+  behavior: Behavior;
 }
 
-export type Request =
-  | { type: "getState"; refresh?: boolean }
-  | { type: "setPolicy"; tool: string; policy: Policy }
-  | { type: "openOptions" };
+export type Request = { type: "getState"; refresh?: boolean } | { type: "setPolicy"; tool: string; policy: Policy } | { type: "openOptions" };
 
 /** `approved`: the user pressed Run for this very call. The service worker runs an "ask" tool only then. */
 export type PortRequest = { type: "call"; tool: string; arguments: Record<string, unknown>; approved: boolean } | { type: "ping" };
 
-/** `needsApproval`: the tool is "ask" (the page's list was out of date); nothing ran. */
-export type PortReply = { type: "result"; ok: boolean; text: string; durationMs: number; needsApproval?: boolean } | { type: "pong" };
-
-/** The message for a tool Gemini named that does not exist. */
-export function noSuchTool(name: string, available: string[]): string {
-  return `There is no tool named "${name}". Available tools: ${available.join(", ") || "none"}.`;
+/** The answer to a call. `needsApproval`: the tool is "ask" (the page's list was out of date); nothing ran. */
+export interface CallReply {
+  ok: boolean;
+  text: string;
+  durationMs: number;
+  needsApproval?: boolean;
 }

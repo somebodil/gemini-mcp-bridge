@@ -85,17 +85,95 @@ describe("failures", () => {
     await assert.rejects(c.connect(2000), (e: unknown) => e instanceof McpError && e.kind === "network" && /local server running/.test(e.message));
   });
 
-  it("can be cancelled", async () => {
-    const slow = createServer(() => undefined);
-    await new Promise<void>((r) => slow.listen(0, "127.0.0.1", r));
-    const c = new McpClient({ url: `http://127.0.0.1:${(slow.address() as AddressInfo).port}/mcp` });
-    const ctrl = new AbortController();
-    setTimeout(() => ctrl.abort(), 100);
-    // connect has no signal; a call does: fake a connected client
-    (c as unknown as { info: object }).info = { protocolVersion: "2025-06-18" };
-    await assert.rejects(c.callTool("x", {}, 10_000, ctrl.signal), (e: unknown) => e instanceof McpError && e.message === "Cancelled.");
-    slow.closeAllConnections();
-    slow.close();
+  it("tells the server when a call is cancelled, and stops waiting", async () => {
+    const s = await startTestServer();
+    try {
+      const c = new McpClient({ url: s.url });
+      await c.connect();
+      const ctrl = new AbortController();
+      setTimeout(() => ctrl.abort(), 200);
+      await assert.rejects(c.callTool("run_command", { command: "sleep 3" }, 10_000, ctrl.signal), (e: unknown) => e instanceof McpError && e.message === "Cancelled.");
+      await new Promise((r) => setTimeout(r, 200));
+      assert.ok(s.methods.includes("notifications/cancelled"), s.methods.join(","));
+      await assert.rejects(c.callTool("x", {}, 1000, ctrl.signal), (e: unknown) => e instanceof McpError && e.message === "Cancelled.");
+    } finally {
+      s.close();
+    }
+  });
+});
+
+/** A raw HTTP server answering each JSON-RPC message with `answer(message)`; it records what it was sent. */
+async function rawServer(answer: (m: { id?: number; method?: string; params?: Record<string, unknown> }, res: import("node:http").ServerResponse) => void) {
+  const got: { method?: string; id?: number; result?: unknown; httpMethod: string }[] = [];
+  const server = createServer((req, res) => {
+    void (async () => {
+      const chunks: Buffer[] = [];
+      for await (const c of req) chunks.push(c as Buffer);
+      const raw = Buffer.concat(chunks).toString("utf8");
+      const m = (raw ? JSON.parse(raw) : {}) as { id?: number; method?: string; params?: Record<string, unknown>; result?: unknown };
+      got.push({ ...m, httpMethod: req.method ?? "" });
+      if (req.method === "DELETE" || m.id === undefined || m.result !== undefined) return void res.writeHead(202).end();
+      if (m.method === "initialize") {
+        res.writeHead(200, { "content-type": "application/json", "mcp-session-id": "sess-1" });
+        return void res.end(JSON.stringify({ jsonrpc: "2.0", id: m.id, result: { protocolVersion: "2025-06-18", serverInfo: { name: "raw" } } }));
+      }
+      answer(m, res);
+    })();
+  });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  return { url: `http://127.0.0.1:${(server.address() as AddressInfo).port}/mcp`, got, close: () => server.close() };
+}
+
+describe("protocol details", () => {
+  it("answers a server's ping that comes inside a streamed answer", async () => {
+    const s = await rawServer((m, res) => {
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.write(`data: ${JSON.stringify({ jsonrpc: "2.0", id: 900, method: "ping" })}\n\n`);
+      setTimeout(() => res.end(`data: ${JSON.stringify({ jsonrpc: "2.0", id: m.id, result: { content: [{ type: "text", text: "after ping" }] } })}\n\n`), 100);
+    });
+    try {
+      const c = new McpClient({ url: s.url });
+      assert.equal(resultToText(await c.callTool("t", {}, 5000)), "after ping");
+      const pong = s.got.find((g) => g.id === 900 && g.result !== undefined);
+      assert.deepEqual(pong?.result, {});
+    } finally {
+      s.close();
+    }
+  });
+
+  it("reads every page of a tool list, and answers given as a batch", async () => {
+    const s = await rawServer((m, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      const cursor = m.params?.cursor;
+      const page = cursor ? { tools: [{ name: "b" }] } : { tools: [{ name: "a" }], nextCursor: "p2" };
+      // the answer in a batch, after a notification
+      res.end(JSON.stringify([{ jsonrpc: "2.0", method: "notifications/message", params: {} }, { jsonrpc: "2.0", id: m.id, result: page }]));
+    });
+    try {
+      const c = new McpClient({ url: s.url });
+      assert.deepEqual(
+        (await c.listTools()).map((t) => t.name),
+        ["a", "b"],
+      );
+    } finally {
+      s.close();
+    }
+  });
+
+  it("ends its session on close", async () => {
+    const s = await rawServer((m, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ jsonrpc: "2.0", id: m.id, result: { tools: [] } }));
+    });
+    try {
+      const c = new McpClient({ url: s.url });
+      await c.listTools();
+      await c.close();
+      assert.equal(c.connected, false);
+      assert.ok(s.got.some((g) => g.httpMethod === "DELETE"));
+    } finally {
+      s.close();
+    }
   });
 });
 

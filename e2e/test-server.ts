@@ -70,6 +70,8 @@ export interface TestServer {
   url: string;
   /** Names of the tools called, in order. */
   calls: string[];
+  /** JSON-RPC methods received (requests and notifications), and "DELETE" for a session ended. */
+  methods: string[];
   http: HttpServer;
   /** Forgets all sessions, as a restarted server would (sessions mode only). */
   forgetSessions(): void;
@@ -79,12 +81,15 @@ export interface TestServer {
 export async function startTestServer(opts: { token?: string; sessions?: boolean } = {}): Promise<TestServer> {
   const sessions = new Map<string, StreamableHTTPServerTransport>();
   const calls: string[] = [];
+  const methods: string[] = [];
   const http = createServer((req, res) => {
     void (async () => {
       if (opts.token && req.headers.authorization !== `Bearer ${opts.token}`) return void res.writeHead(401).end("Missing or wrong token");
       const chunks: Buffer[] = [];
       for await (const c of req) chunks.push(c as Buffer);
       const body: unknown = chunks.length ? JSON.parse(Buffer.concat(chunks).toString("utf8")) : undefined;
+      if (req.method === "DELETE") methods.push("DELETE");
+      for (const m of Array.isArray(body) ? body : [body]) if (m && typeof (m as { method?: unknown }).method === "string") methods.push((m as { method: string }).method);
       if (!opts.sessions) {
         const server = mcp(calls);
         const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
@@ -110,6 +115,7 @@ export async function startTestServer(opts: { token?: string; sessions?: boolean
   return {
     url: `http://127.0.0.1:${(http.address() as AddressInfo).port}/mcp`,
     calls,
+    methods,
     http,
     forgetSessions: () => sessions.clear(),
     close: () => {

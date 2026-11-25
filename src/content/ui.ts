@@ -3,37 +3,20 @@
 // that Gemini's styles do not reach them; nothing is built from HTML strings.
 
 import type { BridgeState } from "../shared/config.ts";
+import { h, onTrustedClick } from "../shared/dom.ts";
 import { t } from "../shared/i18n.ts";
-
-type Child = Node | string | null | undefined | false;
-
-/**
- * Only a real click counts: a script of the page could call .click() on a button in an open shadow root, and its
- * events have isTrusted false.
- */
-export function onTrustedClick(el: HTMLElement, fn: () => void): void {
-  el.addEventListener("click", (e) => {
-    if (e.isTrusted) fn();
-  });
-}
-
-/** Characters that change how text is shown without being seen (bidi controls, zero-width) are shown as \u{...}. */
-export function visible(s: string): string {
-  return s.replace(/[\u200B-\u200F\u202A-\u202E\u2060-\u2069\uFEFF]/g, (c) => `\\u{${c.codePointAt(0)?.toString(16).toUpperCase()}}`);
-}
+import type { ParsedCall, ParseProblem } from "../shared/protocol.ts";
 
 /** The buttons of a new question stay disabled this long: a key pressed while typing does not answer it. */
 const ASK_GUARD_MS = 600;
 
-export function h<K extends keyof HTMLElementTagNameMap>(tag: K, attrs: Record<string, string> = {}, ...children: Child[]): HTMLElementTagNameMap[K] {
-  const el = document.createElement(tag);
-  for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
-  for (const c of children) if (c) el.append(c);
-  return el;
+/** Characters that change how text is shown without being seen (bidi controls, zero-width) are shown as \u{...}. */
+function visible(s: string): string {
+  return s.replace(/[​-‏‪-‮⁠-⁩﻿]/g, (c) => `\\u{${c.codePointAt(0)?.toString(16).toUpperCase()}}`);
 }
 
 /** Dark when the page's background is dark: Gemini follows its own theme setting, not only the system's. */
-function pageIsDark(): boolean {
+export function pageIsDark(): boolean {
   for (const el of [document.body, document.documentElement]) {
     const m = getComputedStyle(el).backgroundColor.match(/\d+(\.\d+)?/g);
     if (m && m.length >= 3 && (m.length < 4 || Number(m[3]) > 0)) {
@@ -61,13 +44,20 @@ details > summary { cursor: pointer; color: var(--muted); margin-top: 4px; }
 .ok { color: var(--ok); } .err { color: var(--err); } .warn { color: var(--warn); } .muted { color: var(--muted); }
 `;
 
+/** One stylesheet object for all cards (and one for the button): not a <style> in each shadow root. */
+function sheet(css: string): CSSStyleSheet {
+  const s = new CSSStyleSheet();
+  s.replaceSync(css);
+  return s;
+}
+
 // ---------------------------------------------------------------------------------------------------------
 // Cards
 
 export type RowState = "waiting" | "ask" | "running" | "done" | "error" | "denied" | "earlier" | "skipped" | "unreadable";
-export type Decision = "run" | "always" | "deny";
+type Decision = "run" | "always" | "deny";
 
-const CARD_CSS = `${BASE_CSS}
+const CARD_SHEET = sheet(`${BASE_CSS}
 .card { margin: 8px 0; border: 1px solid var(--line); border-radius: 12px; padding: 8px 12px; background: var(--bg); }
 .row + .row { border-top: 1px solid var(--line); margin-top: 8px; padding-top: 8px; }
 .head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
@@ -77,14 +67,13 @@ const CARD_CSS = `${BASE_CSS}
 .spin { display: inline-block; width: 10px; height: 10px; border: 2px solid var(--muted); border-top-color: transparent; border-radius: 50%;
   animation: spin 0.8s linear infinite; vertical-align: -1px; }
 @keyframes spin { to { transform: rotate(360deg); } }
-`;
+`);
 
 export class Row {
   readonly el: HTMLDivElement;
   private readonly stateEl: HTMLSpanElement;
   private readonly body: HTMLDivElement;
   private readonly argsText: string;
-  state: RowState = "waiting";
 
   constructor(tool: string, args: unknown) {
     this.argsText = args === undefined ? "" : visible(JSON.stringify(args, null, 2));
@@ -94,7 +83,6 @@ export class Row {
   }
 
   set(state: RowState, detail: { output?: string; durationMs?: number; note?: string } = {}): void {
-    this.state = state;
     const labels: Record<RowState, [string, string]> = {
       waiting: [t("stateWaiting"), "muted"],
       ask: [t("askCall"), "warn"],
@@ -112,7 +100,7 @@ export class Row {
     this.stateEl.replaceChildren(state === "running" ? h("span", { class: "spin" }) : "", ` ${label}${time}`);
     const parts: Node[] = [];
     if (this.argsText && this.argsText !== "{}") parts.push(this.details(t("args"), this.argsText, state === "ask"));
-    if (detail.note) parts.push(h("div", { class: "muted" }, detail.note));
+    if (detail.note) parts.push(h("div", { class: "muted" }, visible(detail.note)));
     if (detail.output !== undefined) {
       const out = visible(detail.output.length > 4000 ? `${detail.output.slice(0, 4000)}\n...` : detail.output || "(no output)");
       parts.push(this.details(t("output"), out, false));
@@ -160,30 +148,52 @@ export class Row {
   }
 }
 
+let dark = false;
+const allCards = new Set<Card>();
+
+/** The page's theme, read once per tick; cards and the button follow it. */
+export function setTheme(isDark: boolean): void {
+  if (isDark === dark) return;
+  dark = isDark;
+  for (const c of allCards) c.host.toggleAttribute("data-dark", dark);
+}
+
 export class Card {
   readonly host: HTMLElement;
   private readonly box: HTMLDivElement;
   rows: Row[] = [];
   /** "live" once the extension handles the calls of this card, "earlier" for calls from before. */
   mode: "earlier" | "waiting" | "live" = "earlier";
+  /** The block text the rows were made from: a block still being written is parsed again when it grows. */
+  text = "";
 
   constructor() {
     this.host = document.createElement("gmb-card");
     const root = this.host.attachShadow({ mode: "open" });
+    root.adoptedStyleSheets = [CARD_SHEET];
     this.box = h("div", { class: "card" });
-    root.append(h("style", {}, CARD_CSS), this.box);
-    this.theme();
+    root.append(this.box);
+    this.host.toggleAttribute("data-dark", dark);
+    allCards.add(this);
   }
 
-  theme(): void {
-    this.host.toggleAttribute("data-dark", pageIsDark());
-  }
-
-  setRows(items: { tool: string; args?: unknown }[], state: RowState): Row[] {
-    this.rows = items.map((it) => new Row(it.tool, it.args));
+  /** One row per call, and one per block that could not be read (with the reason). */
+  setCalls(calls: ParsedCall[], problems: ParseProblem[], state: RowState): Row[] {
+    this.rows = calls.map((c) => new Row(c.tool, c.arguments));
     for (const r of this.rows) r.set(state);
-    this.box.replaceChildren(...this.rows.map((r) => r.el));
+    const bad = problems.map((p) => {
+      const r = new Row("mcp_call", undefined);
+      r.set("unreadable", { note: p.error });
+      return r;
+    });
+    this.box.replaceChildren(...this.rows.map((r) => r.el), ...bad.map((r) => r.el));
     return this.rows;
+  }
+
+  /** Leaves the page for good (another conversation was opened). */
+  drop(): void {
+    allCards.delete(this);
+    this.host.remove();
   }
 }
 
@@ -191,6 +201,7 @@ export class Card {
 // Status button and its panel
 
 export interface Notice {
+  kind: "paused" | "results" | "inBox" | "sendFailed";
   text: string;
   action?: { label: string; run: () => void };
 }
@@ -201,7 +212,7 @@ export interface PillHandlers {
   onSettings(): void;
 }
 
-const PILL_CSS = `${BASE_CSS}
+const PILL_SHEET = sheet(`${BASE_CSS}
 :host { position: fixed; right: 16px; bottom: 16px; z-index: 2147483000; }
 .pill { display: flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 999px; border: 1px solid var(--line);
   background: var(--bg); color: var(--fg); box-shadow: 0 1px 3px rgba(0,0,0,.2); }
@@ -216,27 +227,35 @@ const PILL_CSS = `${BASE_CSS}
 .notice { position: absolute; right: 0; bottom: 44px; width: 300px; max-width: calc(100vw - 32px); padding: 10px 12px; border-radius: 12px;
   border: 1px solid var(--warn); background: var(--bg); display: grid; gap: 8px; box-shadow: 0 4px 16px rgba(0,0,0,.25); }
 label { display: flex; gap: 8px; align-items: center; cursor: pointer; }
-`;
+`);
+
+interface PillView {
+  state: BridgeState | null;
+  chatOn: boolean;
+  notice: Notice | null;
+  invalid: boolean;
+}
 
 export class Pill {
   readonly host: HTMLElement;
   private readonly root: ShadowRoot;
   private open = false;
-  private last: { state: BridgeState | null; chatOn: boolean; notice: Notice | null; invalid: boolean } = { state: null, chatOn: true, notice: null, invalid: false };
+  private last: PillView = { state: null, chatOn: true, notice: null, invalid: false };
   private readonly handlers: PillHandlers;
 
   constructor(handlers: PillHandlers) {
     this.handlers = handlers;
     this.host = document.createElement("gmb-status");
     this.root = this.host.attachShadow({ mode: "open" });
+    this.root.adoptedStyleSheets = [PILL_SHEET];
     document.documentElement.append(this.host);
   }
 
-  render(view: { state: BridgeState | null; chatOn: boolean; notice: Notice | null; invalid?: boolean }): void {
-    this.last = { ...view, invalid: view.invalid === true };
+  render(view: PillView): void {
+    this.last = view;
     if (!this.host.isConnected) document.documentElement.append(this.host);
-    this.host.toggleAttribute("data-dark", pageIsDark());
-    const { state, chatOn, notice, invalid } = this.last;
+    this.host.toggleAttribute("data-dark", dark);
+    const { state, chatOn, notice, invalid } = view;
     const live = state?.servers.filter((s) => s.status === "ok") ?? [];
     const failed = state?.servers.some((s) => s.status === "error") ?? false;
     let dot = "";
@@ -252,7 +271,7 @@ export class Pill {
       this.open = !this.open;
       this.render(this.last);
     });
-    const children: Node[] = [h("style", {}, PILL_CSS), pill];
+    const children: Node[] = [pill];
     if (invalid) children.push(h("div", { class: "notice" }, t("reloadPage")));
     else if (notice && !this.open) children.push(this.noticeBox(notice));
     else if (this.open) children.push(this.panel(state, chatOn));
@@ -311,37 +330,42 @@ const PAGE_CSS = `
 .gmb-hidden-line { display: none !important; }
 .gmb-chip { display: inline-flex; align-items: center; gap: 6px; margin: 2px 0 4px; padding: 2px 10px; border-radius: 999px;
   font-size: 12px; line-height: 20px; cursor: pointer; user-select: none; background: rgba(127,127,127,.16); opacity: .9; }
-.gmb-chip:hover { opacity: 1; }
+.gmb-chip:hover, .gmb-chip:focus-visible { opacity: 1; }
 `;
 
 export function installPageStyle(): void {
   if (document.getElementById("gmb-page-style")) return;
-  const style = h("style", { id: "gmb-page-style" }, PAGE_CSS);
-  (document.head ?? document.documentElement).append(style);
+  (document.head ?? document.documentElement).append(h("style", { id: "gmb-page-style" }, PAGE_CSS));
 }
 
 /**
- * Puts a chip in front of `lines` and hides them; a click on the chip shows them again. `key` tells apart two
- * chips in one message (instructions, then results).
+ * Puts a chip in front of `lines` and hides them; a click (or Enter, Space) on the chip shows them again. `key`
+ * tells apart two chips in one message (instructions, then results). Writes to the page only what changed.
  */
-export function collapse(container: HTMLElement, lines: HTMLElement[], label: string, key = "main"): void {
+export function collapse(lines: HTMLElement[], label: string, key = "main"): void {
   if (!lines.length) return;
-  let chip = container.querySelector<HTMLElement>(`:scope > .gmb-chip[data-key="${key}"]`);
+  const before = lines[0].previousElementSibling;
+  let chip = before instanceof HTMLElement && before.classList.contains("gmb-chip") && before.dataset.key === key ? before : null;
   if (!chip) {
     const c = h("span", { class: "gmb-chip", role: "button", tabindex: "0", "data-key": key });
-    c.addEventListener("click", (e) => {
+    const toggle = (e: Event) => {
       e.stopPropagation();
       const open = c.dataset.open !== "1";
       c.dataset.open = open ? "1" : "0";
-      for (const l of container.querySelectorAll<HTMLElement>(`[data-gmb-line="${key}"]`)) l.classList.toggle("gmb-hidden-line", !open);
+      for (const l of lines) l.classList.toggle("gmb-hidden-line", !open);
+    };
+    c.addEventListener("click", toggle);
+    c.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        toggle(e);
+      }
     });
     lines[0].before(c);
     chip = c;
   }
-  chip.textContent = `🔧 ${label}`;
-  const open = chip.dataset.open === "1";
-  for (const l of lines) {
-    l.dataset.gmbLine = key;
-    l.classList.toggle("gmb-hidden-line", !open);
-  }
+  const text = `🔧 ${label}`;
+  if (chip.textContent !== text) chip.textContent = text;
+  const hide = chip.dataset.open !== "1";
+  for (const l of lines) if (l.classList.contains("gmb-hidden-line") !== hide) l.classList.toggle("gmb-hidden-line", hide);
 }

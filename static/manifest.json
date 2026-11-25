@@ -3,16 +3,43 @@
   "name": "__MSG_extName__",
   "short_name": "MCP Bridge",
   "description": "__MSG_extDescription__",
-  "version": "0.1.0",
+  "version": "0.0.0",
   "default_locale": "en",
   "minimum_chrome_version": "120",
-  "icons": { "16": "icons/16.png", "32": "icons/32.png", "48": "icons/48.png", "128": "icons/128.png" },
-  "permissions": ["storage"],
-  "host_permissions": ["http://127.0.0.1/*", "http://localhost/*"],
-  "background": { "service_worker": "background.js", "type": "module" },
-  "content_scripts": [
-    { "matches": ["https://gemini.google.com/*"], "js": ["content.js"], "run_at": "document_idle" }
+  "icons": {
+    "16": "icons/16.png",
+    "32": "icons/32.png",
+    "48": "icons/48.png",
+    "128": "icons/128.png"
+  },
+  "permissions": [
+    "storage"
   ],
-  "action": { "default_popup": "popup.html", "default_title": "Gemini MCP Bridge", "default_icon": { "16": "icons/16.png", "32": "icons/32.png" } },
+  "host_permissions": [
+    "http://127.0.0.1/*",
+    "http://localhost/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://gemini.google.com/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_title": "Gemini MCP Bridge",
+    "default_icon": {
+      "16": "icons/16.png",
+      "32": "icons/32.png"
+    }
+  },
   "options_page": "options.html"
 }

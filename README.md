@@ -25,28 +25,107 @@ Gemini does not know an extension exists. It follows the instructions in the con
 
 ## Install
 
-1. **Start the local server** (Node.js 20 or later). Its first start prints a URL and a token:
+The extension is not in the Chrome Web Store: you install it from a release, by hand. It takes about five minutes.
 
-   ```bash
-   npx gemini-mcp-bridge-server
-   ```
+### 1. Start the local server
 
-   To have it start whenever you log in: `npm install -g gemini-mcp-bridge-server`, then `gemini-mcp-bridge-server install-service` ([details](https://github.com/somebodil/gemini-mcp-bridge-server#start-it-when-you-log-in)).
+You need Node.js 20 or later. Check in a terminal:
 
-2. **Add the extension to Chrome** (it is not in the Chrome Web Store):
-    1. Download `gemini-mcp-bridge-extension-<version>.zip` from the latest [release](../../releases/latest) and unzip it into a folder you keep.
-    2. Open `chrome://extensions` and turn on **Developer mode** (top right).
-    3. Click **Load unpacked** and choose the folder.
+```bash
+node --version
+```
 
-   A new version does not install itself: download the new zip, unzip it over the same folder, and press the reload button of the extension in `chrome://extensions`. Your settings stay.
-3. **Connect them:** the options page opens after the install (later: the extension's icon > **Settings**). Enter the URL and the token, then press **Test**. It should say *Connected · 4 tools*.
-4. **Use it:** open Gemini and ask something that needs your computer, for example *"What are the largest files in my Downloads folder?"*. A small button in the lower right corner of Gemini's page shows the state, and turns the tools off for one chat.
+No `node`, or a version under 20: install the LTS version from [nodejs.org](https://nodejs.org).
+
+Then start the server:
+
+```bash
+npx gemini-mcp-bridge-server
+```
+
+The first start makes a config file with a random token and prints what the extension needs:
+
+```
+gemini-mcp-bridge-server 0.1.0
+  URL:    http://127.0.0.1:7341/mcp
+  Token:  3q2-...
+  Config: /home/you/.config/gemini-mcp-bridge-server/config.json (new)
+  Tools:  run_command, read_file, write_file, list_directory
+```
+
+Leave this window open while you use Gemini: the server runs as long as the window does, and every call shows up there.
+
+To have the server start by itself whenever you log in, install it once and register it (macOS, Linux and Windows, no administrator rights):
+
+```bash
+npm install -g gemini-mcp-bridge-server
+gemini-mcp-bridge-server install-service
+```
+
+More about the server: [gemini-mcp-bridge-server](https://github.com/somebodil/gemini-mcp-bridge-server#readme).
+
+### 2. Add the extension to Chrome
+
+1. Open the [latest release](https://github.com/somebodil/gemini-mcp-bridge/releases/latest) and download `gemini-mcp-bridge-extension-<version>.zip` (under **Assets**).
+2. Unzip it into a folder that stays where it is, for example `Documents/gemini-mcp-bridge`. Chrome loads the extension from this folder every time it starts: do not delete or move it.
+3. Open `chrome://extensions` (type it into the address bar).
+4. Turn on **Developer mode** (the switch at the top right).
+5. Click **Load unpacked** (top left) and choose the folder from step 2: the one that holds `manifest.json`.
+6. *Gemini MCP Bridge* appears in the list, and its options page opens.
+7. Optional: click the puzzle icon in Chrome's toolbar and pin *Gemini MCP Bridge*, so that its icon is always there.
+
+### 3. Connect the extension to the server
+
+On the options page (later: click the extension's icon in Chrome's toolbar):
+
+1. Leave the URL as it is (`http://127.0.0.1:7341/mcp`), unless you started the server with another port.
+2. Paste the token the server printed. Lost it? Run `gemini-mcp-bridge-server token` (or `npx gemini-mcp-bridge-server token`).
+3. Press **Test**. It should say *Connected · gemini-mcp-bridge-server · 4 tools*, and list the tools below.
+
+![The options page, connected](store/images/screenshot-3-options.png)
+
+### 4. Use it
+
+Open [Gemini](https://gemini.google.com/app), start a new chat, and ask something that needs your computer, for example *"What are the largest files in my Downloads folder?"*.
+
+- The button in the lower right corner of the page shows the state (*MCP · 4 tools*). Click it to see the servers, or to turn the tools off for this chat.
+- Each call gets a card under it. Press **Run** to run it, **Always allow** to let that tool run without asking from now on, or **Deny**.
+
+![A call waiting for Run](store/images/screenshot-1-ask.png)
+
+## Update
+
+A new version does not install itself:
+
+1. Download the new zip from the [latest release](https://github.com/somebodil/gemini-mcp-bridge/releases/latest).
+2. Unzip it over the same folder (replace the files).
+3. In `chrome://extensions`, press the reload button (the round arrow) on *Gemini MCP Bridge*.
+4. Reload the Gemini tabs that are open.
+
+Your settings stay. The server updates the same way it was installed: `npx` takes the latest version by itself; after `npm install -g`, run it again.
+
+## Uninstall
+
+- The extension: **Remove** on its card in `chrome://extensions`, then delete its folder.
+- The server: `gemini-mcp-bridge-server uninstall-service` if you registered it, `npm uninstall -g gemini-mcp-bridge-server` if you installed it, and delete its config file (the path is in its first lines of output) to forget the token.
+
+## Troubleshooting
+
+| What you see | What to do |
+|---|---|
+| *Cannot reach http://127.0.0.1:7341/mcp ... Is the local server running?* | Start the server (step 1), then press **Test** or **Refresh**. |
+| *HTTP 401 ... Check the token* | The token in the options does not match the server's: paste it again (`gemini-mcp-bridge-server token`). |
+| *Only 127.0.0.1 and localhost addresses can be reached* | The extension talks only to servers on your own computer. |
+| The corner button says *The extension was updated: reload this page* | Reload the Gemini tab. |
+| Gemini says it cannot access your computer | Start a new chat: the instructions go with the first message of a chat. Check that the corner button shows tools, and not *Off*. |
+| Gemini writes a call, but nothing happens | Look at the card under it: it may be waiting for **Run**. A call in a chat opened from the history never runs: only replies written while the page is open do. |
+| The extension disappeared after Chrome restarted | Its folder was moved or deleted: unzip it again and **Load unpacked** again. |
 
 ## Safety
 
 Read this before you allow a tool to run by itself.
 
-- **Calls wait for you.** By default every call waits for your **Run**. *Always allow* (or the options page) lets one tool run without asking. *Run every tool without asking* exists, but it means that whatever Gemini writes runs.
+- **Calls wait for you.** By default every call waits for your **Run**. *Always allow* (or *Auto* on the options page) lets one tool run without asking; there is no switch that lets every tool run.
 - **Gemini's text is not trustworthy.** A web page, a document or an email that Gemini reads can carry instructions of its own ("prompt injection"). Keep tools that run commands or write files on **Ask** unless you watch closely.
 - **Old conversations never run calls.** A reply is handled only if this tab saw Gemini write it. Opening an old chat, reloading the page or switching chats runs nothing.
 - **Local only.** The extension may reach only `127.0.0.1` and `localhost`.
@@ -87,7 +166,7 @@ node e2e/obey.ts  # how often each Gemini model follows the instructions (after 
 
 With `localStorage["gmb-debug"] = "1"` on gemini.google.com, the extension writes its steps to the console.
 
-A release: set the same version in `package.json`, `static/manifest.json` and `src/background/mcp-client.ts`, then push a tag with that version. The workflow builds the zip, attests it, and creates the release.
+A release: set the version in `package.json` (the build writes it into the manifest), then push a tag with that version. The workflow builds the zip, attests it, and creates the release.
 
 `store/` holds what a Chrome Web Store listing would need (texts, screenshots, the promo tile), for the day the extension goes there.
 

@@ -12,7 +12,7 @@ export const MARK = {
   results: "[MCP Bridge · results]",
 } as const;
 
-export const CALL_KEY = "mcp_call";
+const CALL_KEY = "mcp_call";
 
 /** A code block is a call (or a broken one) only when it holds the key as JSON writes it, not when it mentions it. */
 export function looksLikeCall(text: string): boolean {
@@ -22,7 +22,7 @@ export function looksLikeCall(text: string): boolean {
 /** The heading of the tool list in the instructions; the chip counts the lines after it. */
 export const TOOLS_HEADING = "Tools you can request:";
 
-export interface JsonSchema {
+interface JsonSchema {
   type?: string | string[];
   description?: string;
   properties?: Record<string, JsonSchema>;
@@ -165,7 +165,7 @@ export interface ParseProblem {
   error: string;
 }
 
-export interface ParseResult {
+interface ParseResult {
   calls: ParsedCall[];
   problems: ParseProblem[];
 }
@@ -185,7 +185,7 @@ export function parseCalls(blocks: string[], text = ""): ParseResult {
     }
     for (const o of objects) addCall(result, o);
   }
-  if (!result.calls.length && !result.problems.length && text.includes(`"${CALL_KEY}"`)) {
+  if (!result.calls.length && !result.problems.length && looksLikeCall(text)) {
     for (const o of extractObjects(text)) addCall(result, o);
   }
   return result;
@@ -223,7 +223,11 @@ export function extractObjects(text: string): { value: unknown; source: string }
     const start = text.indexOf("{", i);
     if (start < 0) break;
     const end = matchBrace(text, start);
-    if (end < 0) break;
+    // a brace that never closes ("a set { like this") hides nothing after it
+    if (end < 0) {
+      i = start + 1;
+      continue;
+    }
     const source = text.slice(start, end + 1);
     const value = parseLenient(source);
     if (value !== undefined) {
@@ -285,7 +289,8 @@ export interface Outcome {
 
 /** The message that carries the results of one reply's calls back to Gemini. */
 export function formatResults(outcomes: Outcome[], maxChars: number): string {
-  const per = Math.max(1000, Math.floor(maxChars / Math.max(1, outcomes.length)));
+  // the budget is shared; a floor keeps every result readable (10 calls at the smallest budget: 100 each)
+  const per = Math.max(100, Math.floor(maxChars / Math.max(1, outcomes.length)));
   const parts: string[] = [MARK.results];
   outcomes.forEach((o, i) => {
     const body = truncate(o.text || "(no output)", per);
@@ -317,7 +322,9 @@ function longestRun(s: string, ch: string): number {
 export function resultsEnd(lines: string[], start: number): number {
   let i = start + 1;
   for (;;) {
-    if (i >= lines.length || !/^#\d+ \S+ → (ok|error)$/.test(lines[i].trim())) return i;
+    // past the end when a fence was never closed: the block takes the rest of the message
+    if (i >= lines.length) return lines.length;
+    if (!/^#\d+ \S+ → (ok|error)$/.test(lines[i].trim())) return i;
     const fence = lines[i + 1]?.trim().match(/^(`{3,})text$/)?.[1];
     if (!fence) return Math.min(lines.length, i + 1);
     let j = i + 2;
