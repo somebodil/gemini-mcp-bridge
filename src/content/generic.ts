@@ -13,11 +13,9 @@
 // count as there before.
 
 import { looksLikeCall, MARK, parseCalls } from "../shared/protocol.ts";
-import { dbg, deepElements, deepTarget, parentOf, shadowOf, type Finished, type Item, type Page } from "./page.ts";
+import { buttonOf, SEND, STOP, dbg, deepElements, deepTarget, editableOf, isButtonish, nameOf, parentOf, shadowOf, typeText, usable, valueOf, type Finished, type Item, type Page } from "./page.ts";
 import { Card } from "./ui.ts";
 
-const SEND = /(^|[^a-z])(send|submit)([^a-z]|$)|보내기|전송|제출/i;
-const STOP = /(^|[^a-z])stop([^a-z]|$)|중지|정지|중단/i;
 /** A reply's blocks unchanged this long (and the page not writing): the reply is finished. */
 const STABLE_MS = 2000;
 /** The same for a block that cannot be read yet: it may be cut off while the page still writes. */
@@ -41,60 +39,6 @@ function pageText(): string {
   return parts.join(" ");
 }
 
-/** The element one writes in that `el` is part of, or null. */
-function editableOf(el: EventTarget | null | undefined): HTMLElement | null {
-  if (el instanceof HTMLTextAreaElement) return el.disabled || el.readOnly ? null : el;
-  // a one-line field counts only when it is wide (a chat box, not a search filter)
-  if (el instanceof HTMLInputElement) return /^(text|search|)$/.test(el.type) && !el.readOnly && el.getBoundingClientRect().width >= 240 ? el : null;
-  if (el instanceof HTMLElement && el.isContentEditable) {
-    let root = el;
-    while (root.parentElement?.isContentEditable) root = root.parentElement;
-    return root;
-  }
-  return null;
-}
-
-function valueOf(ed: HTMLElement): string {
-  if (ed instanceof HTMLTextAreaElement || ed instanceof HTMLInputElement) return ed.value.trim();
-  return ed.innerText.replace(/\u00a0/g, " ").trim();
-}
-
-const isButtonish = (el: Element) => el.localName === "button" || el.getAttribute("role") === "button" || /-button$/.test(el.localName);
-
-/** What a button is called: its label, its tooltip, its test id, its icon's name; and those of a button around it. */
-function nameOf(el: Element): string {
-  const parts: string[] = [];
-  const add = (e: Element) => {
-    for (const a of ["aria-label", "title", "data-test-id", "data-testid", "mattooltip", "icon"]) {
-      const v = e.getAttribute(a);
-      if (v) parts.push(v);
-    }
-    const text = (e.textContent ?? "").trim();
-    if (text.length <= 40) parts.push(text);
-  };
-  add(el);
-  const root = el.getRootNode();
-  const host = root instanceof ShadowRoot ? root.host : null;
-  if (host && isButtonish(host)) add(host);
-  return parts.join(" ");
-}
-
-/** Shown, and not disabled (nor its custom button element around it). */
-function usable(b: Element): boolean {
-  if (b.getClientRects().length === 0) return false;
-  if ((b as HTMLButtonElement).disabled || b.getAttribute("aria-disabled") === "true") return false;
-  const root = b.getRootNode();
-  const host = root instanceof ShadowRoot ? root.host : null;
-  return !(host && (host.hasAttribute("disabled") || host.getAttribute("aria-disabled") === "true"));
-}
-
-/** The button the click went through, if any (it may land on an icon inside it). */
-function buttonOf(e: MouseEvent): Element | null {
-  let el = deepTarget(e);
-  for (let i = 0; el && i < 8; i++, el = parentOf(el)) if (isButtonish(el)) return el;
-  return null;
-}
-
 /** A usable button named like `re` near `from`: in its parent, else its grandparent, and so on. */
 function buttonNear(from: Element, re: RegExp, not?: RegExp): HTMLElement | null {
   let scope: Element | null = from;
@@ -110,15 +54,6 @@ function buttonNear(from: Element, re: RegExp, not?: RegExp): HTMLElement | null
     }
   }
   return null;
-}
-
-/** Writes `text` where the selection is in `ed`, the way typing does, so that the page's own editor follows. */
-function typeText(ed: HTMLElement, text: string): boolean {
-  if (document.execCommand("insertText", false, text)) return true;
-  // the editor turned the command down: hand it the text as a paste
-  const data = new DataTransfer();
-  data.setData("text/plain", text);
-  return !ed.dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true, composed: true }));
 }
 
 function pressEnter(ed: HTMLElement): void {

@@ -1,0 +1,229 @@
+// Learning a page in generic mode, against the mock chat page: the user sends one test message while the extension
+// only watches; what it learned is kept for the site, listed with how sure it is, and outlined on the page.
+
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { after, before, beforeEach, describe, it } from "node:test";
+import type { Page } from "playwright";
+import type { Layout } from "../src/content/layout.ts";
+import { MARK } from "../src/shared/protocol.ts";
+import { startHarness, type Harness } from "./harness.ts";
+
+const MOCK = readFileSync(join(import.meta.dirname, "mock-chat.html"), "utf8");
+const SITE = "https://chat.example.test";
+
+let h: Harness;
+
+before(async () => {
+  h = await startHarness();
+  await h.context.route(`${SITE}/**`, (route) => route.fulfill({ contentType: "text/html", body: MOCK }));
+});
+after(async () => {
+  await h?.close();
+});
+beforeEach(async () => {
+  await h.setSettings({});
+  await h.worker.evaluate(() => chrome.storage.local.remove(["given", "layouts"]));
+  h.calls.length = 0;
+});
+
+async function open(path = "/"): Promise<Page> {
+  const page = await h.context.newPage();
+  await page.addInitScript(() => {
+    localStorage.setItem("gmb-debug", "1");
+    Object.assign(window, { __stepMs: 300 });
+  });
+  await page.goto(SITE + path);
+  assert.equal(await h.toggle(page), true);
+  await page.waitForFunction(() => document.querySelector("gmb-status")?.shadowRoot?.textContent?.includes("tools"), null, { timeout: 10_000 });
+  return page;
+}
+
+const button = (page: Page, text: string) => page.locator("gmb-status button", { hasText: text });
+const box = (page: Page) => page.locator("gmb-status .learn");
+
+async function startLearning(page: Page): Promise<void> {
+  await page.locator("gmb-status .pill").click();
+  await button(page, "Learn this page").click();
+  await box(page).waitFor();
+}
+
+async function sendTest(page: Page, how: "click" | "enter" = "click"): Promise<void> {
+  await page.locator("chat-app textarea").click();
+  await page.waitForFunction(() => document.querySelector("chat-app")?.shadowRoot?.querySelector("textarea")?.value.includes("gmb_test"));
+  if (how === "click") await page.locator("chat-app icon-button").click();
+  else await page.locator("chat-app textarea").press("Enter");
+  await box(page).filter({ hasText: "Everything seen" }).waitFor({ timeout: 20_000 });
+}
+
+async function learn(page: Page, how: "click" | "enter" = "click"): Promise<void> {
+  await startLearning(page);
+  await sendTest(page, how);
+  await button(page, "Stop learning").click();
+  await box(page).filter({ hasText: "What the extension learned" }).waitFor();
+}
+
+const found = (page: Page, role: string) => page.locator(`gmb-status .roles li[data-role="${role}"]`).getAttribute("data-found");
+
+async function stored(): Promise<Layout | undefined> {
+  const all = await h.worker.evaluate(async () => (await chrome.storage.local.get("layouts")).layouts as Record<string, Layout> | undefined);
+  return all?.[SITE];
+}
+
+/** Where a locator leads in the page's own world: an element, or the host of a closed shadow root it goes into. */
+function where(page: Page, loc: string[] | undefined): Promise<string> {
+  return page.evaluate((loc) => {
+    if (!loc) return "none";
+    let tree: Document | ShadowRoot = document;
+    let el: Element | null = null;
+    for (let i = 0; i < loc.length; i++) {
+      el = tree.querySelector(loc[i]);
+      if (!el) return "none";
+      if (i < loc.length - 1) {
+        if (!el.shadowRoot) return `closed ${el.localName}`;
+        tree = el.shadowRoot;
+      }
+    }
+    return el ? [el.localName, ...el.classList].join(".") : "none";
+  }, loc);
+}
+
+/** The elements of the mock's list that each pattern matches. */
+function kinds(page: Page, l: Layout): Promise<Record<"mine" | "reply" | "code", string[]>> {
+  return page.evaluate((l) => {
+    const root = document.querySelector("chat-app")?.shadowRoot;
+    const of = (sel?: string) => (sel && root ? [...root.querySelectorAll("*")].filter((e) => e.matches(sel)).map((e) => [e.localName, ...e.classList].join(".")) : []);
+    return { mine: of(l.mine), reply: of(l.reply), code: of(l.code) };
+  }, l);
+}
+
+describe("learning a page", () => {
+  it("learns every part from one test message, keeps it for the site and outlines it", async () => {
+    const page = await open();
+    try {
+      await startLearning(page);
+      assert.match((await box(page).textContent()) ?? "", /only watches/);
+      await sendTest(page);
+      // the steps were all seen
+      for (const step of ["input", "send", "busy", "mine", "reply", "code", "end"]) {
+        assert.equal(await page.locator(`gmb-status .steps li[data-step="${step}"]`).getAttribute("class"), "done", step);
+      }
+      await button(page, "Stop learning").click();
+      await box(page).filter({ hasText: "What the extension learned" }).waitFor();
+      for (const role of ["input", "send", "busy", "list", "mine", "reply", "code"]) assert.equal(await found(page, role), "ok", role);
+
+      const l = await stored();
+      assert.ok(l, "a layout for the site");
+      assert.equal(await where(page, l.input), "textarea");
+      assert.equal(await where(page, l.send), "closed icon-button");
+      assert.match(await where(page, l.busy?.at), /icon-button/);
+      assert.match(l.busy?.look ?? "", /stop/);
+      assert.equal(await where(page, l.list), "div.log");
+      assert.deepEqual(await kinds(page, l), { mine: ["div.msg.user"], reply: ["div.msg.model"], code: ["pre"] });
+
+      // outlined on the page
+      const roles = await page.locator("gmb-overlay .box").evaluateAll((els) => els.map((e) => (e as HTMLElement).dataset.role));
+      for (const role of ["input", "send", "list", "mine", "reply", "code"]) assert.ok(roles.includes(role), `${role} outlined: ${roles.join(",")}`);
+
+      // the test message went as it was, and nothing ran
+      const sent = await page.evaluate(() => (window as unknown as { __sent: string[] }).__sent);
+      assert.equal(sent.length, 1);
+      assert.match(sent[0], /^This is a test from the Gemini MCP Bridge extension/);
+      assert.ok(!sent[0].includes(MARK.instructions));
+      assert.deepEqual(h.calls, []);
+
+      // closing takes the outlines away; the panel says the site was learned
+      await button(page, "Close").click();
+      assert.equal(await page.locator("gmb-overlay").count(), 0);
+      assert.equal(await box(page).count(), 0);
+      await page.locator("gmb-status .pill").click();
+      await page.locator('gmb-status [data-site="learned"]').waitFor();
+    } finally {
+      await page.close();
+    }
+  });
+
+  it("another tab of the site has it at once, and shows what is on its page now", async () => {
+    const page = await open();
+    const other = await open("/?other");
+    try {
+      await other.locator("gmb-status .pill").click();
+      await other.locator('gmb-status [data-site="guessing"]').waitFor();
+      await learn(page);
+      // the open panel of the other tab follows
+      await other.locator('gmb-status [data-site="learned"]').waitFor();
+      await button(other, "What it learned").click();
+      await box(other).filter({ hasText: "What the extension learned" }).waitFor();
+      assert.equal(await found(other, "input"), "ok");
+      assert.equal(await found(other, "send"), "ok");
+      // no messages in that tab yet
+      assert.equal(await found(other, "mine"), "missing");
+      assert.match((await other.locator('gmb-status .roles li[data-role="mine"]').textContent()) ?? "", /Not on the page now/);
+    } finally {
+      await page.close();
+      await other.close();
+    }
+  });
+
+  it("sent with Enter: the send button is found by its name", async () => {
+    const page = await open();
+    try {
+      await learn(page, "enter");
+      assert.equal(await found(page, "send"), "unsure");
+      assert.match((await page.locator('gmb-status .roles li[data-role="send"]').textContent()) ?? "", /Enter/);
+      assert.equal(await found(page, "busy"), "ok");
+      assert.equal(await found(page, "reply"), "ok");
+      assert.match(await where(page, (await stored())?.send), /icon-button/);
+    } finally {
+      await page.close();
+    }
+  });
+
+  it("stopped before anything was sent: nothing is kept", async () => {
+    const page = await open();
+    try {
+      await startLearning(page);
+      await button(page, "Stop learning").click();
+      await box(page).filter({ hasText: "Nothing was learned" }).waitFor();
+      for (const role of ["input", "send", "busy", "mine", "reply", "code"]) assert.equal(await found(page, role), "missing", role);
+      assert.equal(await stored(), undefined);
+      await button(page, "Close").click();
+      await page.locator("gmb-status .pill").click();
+      await page.locator('gmb-status [data-site="guessing"]').waitFor();
+    } finally {
+      await page.close();
+    }
+  });
+
+  it("cancelled: the bridge works as before (instructions go with the next message)", async () => {
+    const page = await open();
+    try {
+      await startLearning(page);
+      await page.locator("chat-app textarea").click();
+      await page.waitForFunction(() => document.querySelector("chat-app")?.shadowRoot?.querySelector("textarea")?.value.includes("gmb_test"));
+      await button(page, "Cancel").click();
+      assert.equal(await box(page).count(), 0);
+      await page.locator("chat-app textarea").fill("hello");
+      await page.locator("chat-app textarea").press("Enter");
+      await page.waitForFunction(() => (window as unknown as { __sent: string[] }).__sent.length === 1);
+      const sent = await page.evaluate(() => (window as unknown as { __sent: string[] }).__sent[0]);
+      assert.ok(sent.includes(MARK.instructions), sent.slice(0, 80));
+      assert.equal(await stored(), undefined);
+    } finally {
+      await page.close();
+    }
+  });
+
+  it("turning the tab off takes the outlines and the boxes away", async () => {
+    const page = await open();
+    try {
+      await learn(page);
+      assert.ok((await page.locator("gmb-overlay .box").count()) > 0);
+      assert.equal(await h.toggle(page), false);
+      await page.waitForFunction(() => !document.querySelector("gmb-overlay") && !document.querySelector("gmb-status"));
+    } finally {
+      await page.close();
+    }
+  });
+});

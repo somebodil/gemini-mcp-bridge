@@ -8,8 +8,11 @@ import type { BridgeState, CallReply, ExposedTool, Request } from "../shared/con
 import { t } from "../shared/i18n.ts";
 import { buildInstructions, buildToolsUpdate, formatResults, toolsHash, type Outcome, type ParsedCall } from "../shared/protocol.ts";
 import { noSuchTool } from "../shared/tools.ts";
-import { dbg, pageStructure, type Finished, type Page } from "./page.ts";
-import { installPageStyle, pageIsDark, Pill, removePageStyle, setTheme, type Notice, type Row } from "./ui.ts";
+import { layoutChange, loadLayout, saveLayout, type Layout } from "./layout.ts";
+import { checkLayout, Learner, outlineItems, type RoleResult } from "./learn.ts";
+import { Overlay } from "./overlay.ts";
+import { dbg, describe, pageStructure, type Finished, type Page } from "./page.ts";
+import { installPageStyle, pageIsDark, Pill, removePageStyle, setTheme, type LearnBox, type Notice, type Row } from "./ui.ts";
 
 const MAX_CALLS_PER_REPLY = 10;
 const TICK_MS = 400;
@@ -34,6 +37,13 @@ export function startBridge(page: Page): () => void {
   let lastAddress = page.address();
   /** Hash of the instructions this tab last sent. */
   let lastGiven: string | undefined;
+  /** What the extension learned about this site (pages other than gemini.google.com). */
+  let layout: Layout | null = null;
+  /** While the user teaches the page: the extension only watches. */
+  let learner: Learner | null = null;
+  /** What it learned, shown until the user closes it. */
+  let results: { roles: RoleResult[]; saved: boolean } | null = null;
+  const overlay = new Overlay();
 
   const pill = new Pill({
     generic: page.kind === "generic",
@@ -51,6 +61,19 @@ export function startBridge(page: Page): () => void {
     onSettings: () => void send({ type: "openOptions" }),
     onTurnOff: () => void send({ type: "turnOff" }),
     onCopyStructure: () => copy(pageStructure()),
+    onLearnStart: () => startLearning(),
+    onLearnStop: () => stopLearning(),
+    onLearnCancel: () => {
+      learner?.cancel();
+      learner = null;
+      render();
+    },
+    onShowLearned: () => showLearned(),
+    onCloseResults: () => {
+      results = null;
+      overlay.hide();
+      render();
+    },
   });
 
   // -------------------------------------------------------------------------------------------------------
@@ -189,6 +212,8 @@ export function startBridge(page: Page): () => void {
     // a script of the page can dispatch events too (and the extension's own send is a script click): only the
     // user's own count
     if (!e.isTrusted || !alive()) return;
+    // the test message of the learning goes as the user sent it
+    if (learner) return;
     if (holding) {
       // pressed again while the first send is held: one send is enough
       e.preventDefault();
@@ -266,7 +291,7 @@ export function startBridge(page: Page): () => void {
     if (!alive()) return;
     if (page.address() !== lastAddress) onNavigate(lastAddress);
     setTheme(pageIsDark());
-    const finished = page.tick(active(), run !== null);
+    const finished = page.tick(active() && !learner, run !== null);
     if (!finished) return;
     // the answer came: the instructions reached this conversation
     const key = page.givenKey();
@@ -452,14 +477,70 @@ export function startBridge(page: Page): () => void {
   }
 
   // -------------------------------------------------------------------------------------------------------
+  // Learning the page (generic mode)
+
+  function startLearning(): void {
+    if (page.kind !== "generic" || stopped) return;
+    results = null;
+    overlay.hide();
+    learner?.cancel();
+    learner = new Learner(render);
+    pill.close();
+    dbg("learning", learner.nonce);
+    render();
+  }
+
+  function stopLearning(): void {
+    if (!learner) return;
+    const r = learner.stop();
+    learner = null;
+    results = { roles: r.roles, saved: !!r.layout };
+    dbg("learned", r.layout, r.roles.map((x) => `${x.role}:${x.found}`));
+    const learned = r.layout;
+    if (learned) {
+      layout = learned;
+      overlay.show(() => outlineItems(learned));
+      void saveLayout(learned).catch((err) => dbg("could not keep the layout", err));
+    }
+    render();
+  }
+
+  function showLearned(): void {
+    const l = layout;
+    if (!l) return;
+    learner?.cancel();
+    learner = null;
+    results = { roles: checkLayout(l), saved: true };
+    overlay.show(() => outlineItems(l));
+    render();
+  }
+
+  function learnBox(): LearnBox | null {
+    if (learner) return { kind: "learning", view: learner.view() };
+    if (!results) return null;
+    return {
+      kind: "results",
+      saved: results.saved,
+      roles: results.roles.map((r) => ({ role: r.role, found: r.found, detail: r.el ? describe(r.el).slice(0, 80) : "", note: r.note })),
+    };
+  }
+
+  // -------------------------------------------------------------------------------------------------------
 
   function render(): void {
-    if (!stopped) pill.render({ state, chatOn: chatOn(), notice });
+    if (!stopped) pill.render({ state, chatOn: chatOn(), notice, site: page.kind === "generic" ? { learned: layout?.at ?? null } : null, learn: learnBox() });
   }
 
   const onStorage = (changes: Record<string, chrome.storage.StorageChange>, area: string) => {
+    if (area !== "local") return;
     // the service worker reconnects changed servers by itself: no need to list every server again
-    if (area === "local" && changes.settings) void refreshState(false);
+    if (changes.settings) void refreshState(false);
+    // learned in another tab of the site, or forgotten on the options page
+    const l = page.kind === "generic" ? layoutChange(changes) : undefined;
+    if (l !== undefined) {
+      layout = l;
+      render();
+    }
   };
   const onVisible = () => {
     if (document.visibilityState === "visible") void freshState();
@@ -478,6 +559,9 @@ export function startBridge(page: Page): () => void {
       // the extension is gone already
     }
     run?.abort();
+    learner?.cancel();
+    learner = null;
+    overlay.hide();
     page.stop();
     pill.host.remove();
     removePageStyle();
@@ -492,6 +576,11 @@ export function startBridge(page: Page): () => void {
   document.addEventListener("visibilitychange", onVisible);
   const timer = setInterval(tick, TICK_MS);
   void refreshState();
+  if (page.kind === "generic")
+    void loadLayout().then((l) => {
+      layout = l;
+      render();
+    });
   render();
   dbg("started", page.kind);
   return stop;

@@ -6,6 +6,9 @@ import type { BridgeState } from "../shared/config.ts";
 import { h, onTrustedClick } from "../shared/dom.ts";
 import { t } from "../shared/i18n.ts";
 import type { ParsedCall, ParseProblem } from "../shared/protocol.ts";
+import type { Role } from "./layout.ts";
+import type { Found, LearnView } from "./learn.ts";
+import { ROLE_COLOR, roleName } from "./overlay.ts";
 
 /** The buttons of a new question stay disabled this long: a key pressed while typing does not answer it. */
 const ASK_GUARD_MS = 600;
@@ -206,6 +209,11 @@ export interface Notice {
   action?: { label: string; run: () => void };
 }
 
+/** The learning of the page as it goes, or what it learned. */
+export type LearnBox =
+  | { kind: "learning"; view: LearnView }
+  | { kind: "results"; roles: { role: Role; found: Found; detail: string; note?: string }[]; saved: boolean };
+
 export interface PillHandlers {
   /** The page is not gemini.google.com: the panel says so. */
   generic: boolean;
@@ -214,6 +222,11 @@ export interface PillHandlers {
   onSettings(): void;
   onTurnOff(): void;
   onCopyStructure(): Promise<boolean>;
+  onLearnStart(): void;
+  onLearnStop(): void;
+  onLearnCancel(): void;
+  onShowLearned(): void;
+  onCloseResults(): void;
 }
 
 const PILL_SHEET = sheet(`${BASE_CSS}
@@ -234,12 +247,28 @@ const PILL_SHEET = sheet(`${BASE_CSS}
 .notice { position: absolute; right: 0; bottom: 44px; width: 300px; max-width: calc(100vw - 32px); padding: 10px 12px; border-radius: 12px;
   border: 1px solid var(--warn); background: var(--bg); display: grid; gap: 8px; box-shadow: 0 4px 16px rgba(0,0,0,.25); }
 label { display: flex; gap: 8px; align-items: center; cursor: pointer; }
+.learn { position: absolute; right: 0; bottom: 44px; width: 340px; max-width: calc(100vw - 32px); max-height: calc(100vh - 80px); overflow: auto;
+  padding: 12px; border-radius: 12px; border: 1px solid var(--accent); background: var(--bg); box-shadow: 0 4px 16px rgba(0,0,0,.25);
+  display: grid; gap: 8px; }
+:host([data-down]) .learn { bottom: auto; top: 44px; }
+:host([data-left]) .learn { right: auto; left: 0; }
+.title { font-weight: 600; }
+.steps, .roles { margin: 0; padding: 0; list-style: none; display: grid; gap: 4px; }
+.steps li, .roles li { display: grid; grid-template-columns: 18px 1fr; gap: 0 6px; }
+.steps li.todo { color: var(--muted); }
+.steps li.now { font-weight: 600; }
+.mark { text-align: center; font-weight: 600; }
+.detail { grid-column: 2; font-size: 11px; color: var(--muted); word-break: break-all; }
+.swatch { display: inline-block; width: 9px; height: 9px; border-radius: 2px; background: var(--c); margin-right: 5px; vertical-align: 0; }
 `);
 
 interface PillView {
   state: BridgeState | null;
   chatOn: boolean;
   notice: Notice | null;
+  /** On a page other than gemini.google.com: when the extension learned this site, null when it did not. */
+  site: { learned: number | null } | null;
+  learn: LearnBox | null;
 }
 
 const POS_KEY = "gmb-pill-pos";
@@ -248,7 +277,7 @@ export class Pill {
   readonly host: HTMLElement;
   private readonly root: ShadowRoot;
   private open = false;
-  private last: PillView = { state: null, chatOn: true, notice: null };
+  private last: PillView = { state: null, chatOn: true, notice: null, site: null, learn: null };
   private readonly handlers: PillHandlers;
   /** The button was dragged: the click that ends the drag does not open the panel. */
   private dragged = false;
@@ -315,11 +344,16 @@ export class Pill {
     window.addEventListener("pointercancel", up, true);
   }
 
+  /** Closes the panel (learning starts: the page is the user's). */
+  close(): void {
+    this.open = false;
+  }
+
   render(view: PillView): void {
     this.last = view;
     if (!this.host.isConnected) document.documentElement.append(this.host);
     this.host.toggleAttribute("data-dark", dark);
-    const { state, chatOn, notice } = view;
+    const { state, chatOn, notice, site, learn } = view;
     const live = state?.servers.filter((s) => s.status === "ok") ?? [];
     const failed = state?.servers.some((s) => s.status === "error") ?? false;
     let dot = "";
@@ -339,8 +373,9 @@ export class Pill {
       this.render(this.last);
     });
     const children: Node[] = [pill];
-    if (notice && !this.open) children.push(this.noticeBox(notice));
-    else if (this.open) children.push(this.panel(state, chatOn));
+    if (learn && !this.open) children.push(this.learnBox(learn));
+    else if (notice && !this.open) children.push(this.noticeBox(notice));
+    else if (this.open) children.push(this.panel(state, chatOn, site));
     this.root.replaceChildren(...children);
   }
 
@@ -354,7 +389,59 @@ export class Pill {
     return box;
   }
 
-  private panel(state: BridgeState | null, chatOn: boolean): HTMLElement {
+  private button(label: string, run: () => void, primary = false): HTMLButtonElement {
+    const b = h("button", primary ? { class: "primary" } : {}, label);
+    onTrustedClick(b, run);
+    return b;
+  }
+
+  private learnBox(box: LearnBox): HTMLElement {
+    const el = h("div", { class: "learn", role: "status" });
+    if (box.kind === "learning") {
+      const marks = { done: ["✓", "ok"], now: ["●", ""], todo: ["○", "muted"] } as const;
+      const steps = h("ol", { class: "steps" });
+      for (const s of box.view.steps) {
+        const [mark, cls] = marks[s.state];
+        steps.append(
+          h(
+            "li",
+            { class: s.state, "data-step": s.step },
+            h("span", { class: `mark ${cls}` }, mark),
+            h("span", {}, t(`step_${s.step}`)),
+            s.detail ? h("span", { class: "detail" }, s.detail) : null,
+          ),
+        );
+      }
+      el.append(h("div", { class: "title" }, t("learnTitle")), h("div", { class: "small muted" }, t("learnHint")), steps);
+      if (box.view.complete) el.append(h("div", { class: "ok" }, t("learnAllSeen")));
+      el.append(
+        h("div", { class: "buttons" }, this.button(t("learnStop"), () => this.handlers.onLearnStop(), box.view.complete), this.button(t("learnCancel"), () => this.handlers.onLearnCancel())),
+      );
+      return el;
+    }
+    const marks: Record<Found, [string, string]> = { ok: ["✓", "ok"], unsure: ["?", "warn"], missing: ["✗", "err"] };
+    const roles = h("ul", { class: "roles" });
+    for (const r of box.roles) {
+      const [mark, cls] = marks[r.found];
+      const swatch = h("span", { class: "swatch" });
+      swatch.style.setProperty("--c", ROLE_COLOR[r.role]);
+      roles.append(
+        h(
+          "li",
+          { "data-role": r.role, "data-found": r.found },
+          h("span", { class: `mark ${cls}` }, mark),
+          h("span", {}, swatch, roleName(r.role)),
+          r.detail ? h("span", { class: "detail" }, r.detail) : null,
+          r.note ? h("span", { class: "detail" }, r.note) : null,
+        ),
+      );
+    }
+    el.append(h("div", { class: "title" }, t("resultsTitle")), roles, h("div", { class: "small muted" }, box.saved ? t("resultsHint") : t("resultsNothing")));
+    el.append(h("div", { class: "buttons" }, this.button(t("learnAgain"), () => this.handlers.onLearnStart()), this.button(t("learnClose"), () => this.handlers.onCloseResults(), true)));
+    return el;
+  }
+
+  private panel(state: BridgeState | null, chatOn: boolean, site: PillView["site"]): HTMLElement {
     const panel = h("div", { class: "panel" });
     if (!state || !state.enabled) panel.append(h("div", {}, t("bridgeOff")));
     else {
@@ -381,6 +468,21 @@ export class Pill {
       if (!state.servers.some((s) => s.status === "ok")) panel.append(h("div", { class: "small muted" }, t("noServer")));
     }
     if (this.handlers.generic) panel.append(h("div", { class: "small muted" }, t("genericPage")));
+    if (site) {
+      const learned = site.learned;
+      panel.append(h("div", { class: "small", "data-site": learned ? "learned" : "guessing" }, learned ? t("siteLearned", { date: new Date(learned).toLocaleString() }) : t("siteNotLearned")));
+      const start = () => {
+        this.open = false;
+        this.handlers.onLearnStart();
+      };
+      const show = () => {
+        this.open = false;
+        this.handlers.onShowLearned();
+      };
+      panel.append(
+        h("div", { class: "buttons" }, ...(learned ? [this.button(t("learnShow"), show), this.button(t("learnAgain"), start)] : [this.button(t("learnStart"), start, true)])),
+      );
+    }
     const refresh = h("button", {}, t("refresh"));
     onTrustedClick(refresh, () => this.handlers.onRefresh());
     const settings = h("button", {}, t("settings"));

@@ -118,17 +118,99 @@ export function deepTarget(e: Event): Element | null {
   for (let i = 0; i < 20; i++) {
     const sr = el.shadowRoot ? null : shadowOf(el);
     if (!sr) break;
-    const inner: Element | null = e instanceof MouseEvent ? sr.elementFromPoint(e.clientX, e.clientY) : sr.activeElement;
+    let inner: Element | null = e instanceof MouseEvent ? sr.elementFromPoint(e.clientX, e.clientY) : sr.activeElement;
+    if (e instanceof MouseEvent && (!inner || inner === el)) inner = elementAtByBox(sr, e.clientX, e.clientY);
     if (!inner || inner === el) break;
     el = inner;
   }
   return el;
 }
 
+/**
+ * The innermost element of `root` whose box holds the point. Chrome's hit testing does not go into a closed shadow
+ * root (elementFromPoint on it gives its host, even to an extension): the boxes tell instead.
+ */
+export function elementAtByBox(root: ShadowRoot, x: number, y: number): Element | null {
+  let found: Element | null = null;
+  for (const el of deepElements(root)) {
+    const r = el.getBoundingClientRect();
+    if (r.width && r.height && x >= r.left && x <= r.right && y >= r.top && y <= r.bottom) found = el;
+  }
+  return found;
+}
+
 /** The element's parent, through a shadow root to its host. */
 export function parentOf(el: Element): Element | null {
   const p = el.parentNode;
   return p instanceof ShadowRoot ? p.host : p instanceof Element ? p : null;
+}
+
+/** The element one writes in that `el` is part of, or null. */
+export function editableOf(el: EventTarget | null | undefined): HTMLElement | null {
+  if (el instanceof HTMLTextAreaElement) return el.disabled || el.readOnly ? null : el;
+  // a one-line field counts only when it is wide (a chat box, not a search filter)
+  if (el instanceof HTMLInputElement) return /^(text|search|)$/.test(el.type) && !el.readOnly && el.getBoundingClientRect().width >= 240 ? el : null;
+  if (el instanceof HTMLElement && el.isContentEditable) {
+    let root = el;
+    while (root.parentElement?.isContentEditable) root = root.parentElement;
+    return root;
+  }
+  return null;
+}
+
+export function valueOf(ed: HTMLElement): string {
+  if (ed instanceof HTMLTextAreaElement || ed instanceof HTMLInputElement) return ed.value.trim();
+  return ed.innerText.replace(/\u00a0/g, " ").trim();
+}
+
+/** Writes `text` where the selection is in `ed`, the way typing does, so that the page's own editor follows. */
+export function typeText(ed: HTMLElement, text: string): boolean {
+  if (document.execCommand("insertText", false, text)) return true;
+  // the editor turned the command down: hand it the text as a paste
+  const data = new DataTransfer();
+  data.setData("text/plain", text);
+  return !ed.dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true, composed: true }));
+}
+
+/** Names of send and stop buttons. */
+export const SEND = /(^|[^a-z])(send|submit)([^a-z]|$)|보내기|전송|제출/i;
+export const STOP = /(^|[^a-z])stop([^a-z]|$)|중지|정지|중단/i;
+
+/** A button, or what a page uses as one. */
+export const isButtonish = (el: Element) => el.localName === "button" || el.getAttribute("role") === "button" || /-button$/.test(el.localName);
+
+/** What a button is called: its label, its tooltip, its test id, its icon's name; and those of a button around it. */
+export function nameOf(el: Element): string {
+  const parts: string[] = [];
+  const add = (e: Element) => {
+    for (const a of ["aria-label", "title", "data-test-id", "data-testid", "mattooltip", "icon"]) {
+      const v = e.getAttribute(a);
+      if (v) parts.push(v);
+    }
+    const text = (e.textContent ?? "").trim();
+    if (text.length <= 40) parts.push(text);
+  };
+  add(el);
+  const root = el.getRootNode();
+  const host = root instanceof ShadowRoot ? root.host : null;
+  if (host && isButtonish(host)) add(host);
+  return parts.join(" ");
+}
+
+/** The button the click went through, if any (it may land on an icon inside it). */
+export function buttonOf(e: MouseEvent): Element | null {
+  let el = deepTarget(e);
+  for (let i = 0; el && i < 8; i++, el = parentOf(el)) if (isButtonish(el)) return el;
+  return null;
+}
+
+/** Shown, and not disabled (nor its custom button element around it). */
+export function usable(b: Element): boolean {
+  if (b.getClientRects().length === 0) return false;
+  if ((b as HTMLButtonElement).disabled || b.getAttribute("aria-disabled") === "true") return false;
+  const root = b.getRootNode();
+  const host = root instanceof ShadowRoot ? root.host : null;
+  return !(host && (host.hasAttribute("disabled") || host.getAttribute("aria-disabled") === "true"));
 }
 
 // ---------------------------------------------------------------------------------------------------------
@@ -141,7 +223,8 @@ const MAX_LINES = 8000;
 
 const cut = (s: string, n: number) => (s.length > n ? `${s.slice(0, n)}…` : s);
 
-function describe(el: Element): string {
+/** One line about an element: tag, id, classes, the naming attributes, how much text of its own. */
+export function describe(el: Element): string {
   let s = el.localName;
   if (el.id) s += `#${cut(el.id, 40)}`;
   const classes = [...el.classList].slice(0, 6).map((c) => `.${cut(c, 32)}`);
