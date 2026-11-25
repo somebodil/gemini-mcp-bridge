@@ -1,0 +1,143 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Mock chat 2</title>
+    <style>
+      body { font: 14px sans-serif; margin: 0; background: #fff; }
+      .thread { max-width: 720px; margin: 0 auto; padding: 16px 16px 160px; }
+      .turn { display: block; margin: 16px 0; }
+      .turn[data-message-author-role="user"] .bubble { margin-left: auto; max-width: 70%; background: #eef; padding: 8px 12px; border-radius: 12px; white-space: pre-wrap; }
+      .codebox { border: 1px solid #ccc; border-radius: 8px; margin: 8px 0; }
+      .codebox-head { display: flex; justify-content: space-between; padding: 4px 8px; background: #f4f4f4; font-size: 12px; }
+      pre { margin: 0; padding: 8px; white-space: pre-wrap; }
+      .actions button { font-size: 12px; }
+      .typing { color: #888; }
+      .composer { position: fixed; left: 50%; transform: translateX(-50%); bottom: 16px; width: min(720px, 90vw); display: flex; gap: 8px; align-items: end; border: 1px solid #ccc; border-radius: 16px; padding: 8px; background: #fff; }
+      .editor { flex: 1; min-height: 24px; max-height: 200px; overflow-y: auto; outline: none; white-space: pre-wrap; }
+      .send { width: 32px; height: 32px; border-radius: 50%; }
+    </style>
+  </head>
+  <body>
+    <div class="app">
+      <main class="thread"></main>
+      <div class="composer">
+        <div class="editor" contenteditable="true" role="textbox" aria-label="Write a message"></div>
+        <button class="send" type="button" aria-label="Send message" disabled>➤</button>
+      </div>
+    </div>
+    <script>
+      // A second chat page, built unlike mock-chat.html, for the generic mode: no shadow roots, a contenteditable
+      // input box, the whole page scrolls (no list of its own that scrolls), my messages and replies told apart by
+      // nothing but data-message-author-role, my messages shown as typed (no markdown), replies as markdown whose code
+      // blocks have a header with a copy button, buttons under a reply once it is written, a send button greyed
+      // while the box is empty or a reply is written (no stop button), and dots while it writes. Replies are written
+      // out bit by bit into the reply itself (the rest of the page stays). The test message of learning gets the
+      // code block it asks for.
+      window.__sent = [];
+      window.__replies = window.__replies || [];
+
+      const thread = document.querySelector(".thread");
+      const editor = document.querySelector(".editor");
+      const sendBtn = document.querySelector(".send");
+      let generating = false;
+
+      const text = () => editor.innerText.replace(/ /g, " ").trim();
+      const update = () => (sendBtn.disabled = generating || !text());
+      editor.addEventListener("input", update);
+      editor.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
+          e.preventDefault();
+          send();
+        }
+      });
+      sendBtn.addEventListener("click", () => send());
+
+      function markdown(src) {
+        const out = document.createElement("div");
+        out.className = "markdown prose";
+        // a block still being written has no closing fence yet
+        src.split(/```([a-z]*)\n([\s\S]*?)(?:```|$)/).forEach((part, i, all) => {
+          if (i % 3 === 1) return;
+          if (i % 3 === 2) {
+            const box = document.createElement("div");
+            box.className = "codebox";
+            const head = document.createElement("div");
+            head.className = "codebox-head";
+            const lang = document.createElement("span");
+            lang.textContent = all[i - 1] || "text";
+            const copy = document.createElement("button");
+            copy.textContent = "Copy code";
+            head.append(lang, copy);
+            const pre = document.createElement("pre");
+            const code = document.createElement("code");
+            code.className = `language-${all[i - 1] || "text"}`;
+            code.textContent = part;
+            pre.append(code);
+            box.append(head, pre);
+            out.append(box);
+          } else
+            for (const para of part.split(/\n{2,}/)) {
+              if (!para.trim()) continue;
+              const p = document.createElement("p");
+              p.textContent = para.trim();
+              out.append(p);
+            }
+        });
+        return out;
+      }
+
+      function turn(role) {
+        const a = document.createElement("article");
+        a.className = "turn";
+        a.setAttribute("data-message-author-role", role);
+        thread.append(a);
+        return a;
+      }
+
+      function send() {
+        const t = text();
+        if (!t || generating) return;
+        window.__sent.push(t);
+        editor.replaceChildren();
+        const mine = turn("user");
+        const bubble = document.createElement("div");
+        bubble.className = "bubble";
+        bubble.textContent = t;
+        mine.append(bubble);
+        const test = t.match(/"gmb_test":\s*"([^"]+)"/);
+        const reply = test ? `Here it is:\n\n\`\`\`json\n{"gmb_test": "${test[1]}"}\n\`\`\`` : (window.__replies.shift() ?? "Nothing more to say.");
+        generating = true;
+        update();
+        const typing = document.createElement("div");
+        typing.className = "typing";
+        typing.textContent = "•••";
+        thread.append(typing);
+        const answer = turn("assistant");
+        const steps = window.__steps ?? 4;
+        let i = 0;
+        const step = () => {
+          i++;
+          answer.replaceChildren(markdown(reply.slice(0, Math.ceil((reply.length * i) / steps))));
+          window.scrollTo(0, document.body.scrollHeight);
+          if (i < steps) return setTimeout(step, window.__stepMs ?? 150);
+          setTimeout(() => {
+            typing.remove();
+            const actions = document.createElement("div");
+            actions.className = "actions";
+            for (const name of ["Copy", "Good response", "Bad response"]) {
+              const b = document.createElement("button");
+              b.setAttribute("aria-label", name);
+              b.textContent = name[0];
+              actions.append(b);
+            }
+            answer.append(actions);
+            generating = false;
+            update();
+          }, 300);
+        };
+        setTimeout(step, window.__stepMs ?? 150);
+      }
+    </script>
+  </body>
+</html>

@@ -9,34 +9,10 @@
 // nor classes that tell a state (active, disabled, streaming), nor labels (a send button is labelled Stop while
 // the page writes).
 
+import { LAYOUTS_KEY, loadLayouts, storeLayout, type Layout, type Locator, type Pattern } from "../shared/layouts.ts";
 import { deepElements, isOurs, nameOf, parentOf, shadowOf } from "./page.ts";
 
-export type Role = "input" | "send" | "busy" | "list" | "mine" | "reply" | "code";
-export const ROLES: readonly Role[] = ["input", "send", "busy", "list", "mine", "reply", "code"];
-
-/** One element: a selector per tree, from the document down through the shadow roots that hold it. */
-export type Locator = string[];
-/** Elements of one kind: a selector each of them matches, looked for through shadow roots. */
-export type Pattern = string;
-
-export interface Layout {
-  v: 1;
-  /** When it was learned (or last changed by hand). */
-  at: number;
-  input?: Locator;
-  send?: Locator;
-  /**
-   * What tells that the page is writing a reply: the element there looks like `look` (learned while the page
-   * wrote), or (picked by hand while it did not write) its name is no longer `idle`.
-   */
-  busy?: { at: Locator; look?: string; idle?: string };
-  list?: Locator;
-  mine?: Pattern;
-  reply?: Pattern;
-  code?: Pattern;
-  /** Roles the user picked by hand. */
-  picked?: Role[];
-}
+export { ROLES, type Layout, type Locator, type Pattern, type Role } from "../shared/layouts.ts";
 
 // ---------------------------------------------------------------------------------------------------------
 // What stays the same
@@ -63,6 +39,17 @@ function stableValue(v: string): boolean {
 
 const ATTRS = ["data-testid", "data-test-id", "role", "name", "type", "contenteditable"];
 
+/**
+ * A data attribute that tells what an element is (data-message-author-role="user", data-kind="code"): some pages
+ * tell my messages from replies by nothing else. Not one that tells its state, place or id (data-state="open",
+ * data-index="3", data-streaming="true", data-message-id="…").
+ */
+function tellingData(name: string, v: string): boolean {
+  if (!name.startsWith("data-") || ATTRS.includes(name)) return false;
+  if (/(^|-)(id|ids|key|index|idx|state|status|time|date|count|length|pos|position|offset|start|end)$/.test(name)) return false;
+  return /^[A-Za-z][A-Za-z_-]{0,29}$/.test(v) && !STATE_WORDS.test(v) && !/^(true|false|on|off|yes|no|none|null|undefined)$/i.test(v);
+}
+
 const quote = (v: string) => `"${v.replace(/["\\]/g, "\\$&")}"`;
 
 /** The parts of a selector for `el` alone, from the least to the most specific. */
@@ -77,6 +64,7 @@ function variants(el: Element): string[] {
     if (v !== null && (a === "contenteditable" || stableValue(v))) attrs += `[${a}=${quote(v)}]`;
   }
   if (attrs) out.push(tag + attrs);
+  for (const a of el.attributes) if (tellingData(a.name, a.value)) out.push(`${tag + attrs}[${CSS.escape(a.name)}=${quote(a.value)}]`);
   const classes = [...el.classList].filter(stableClass).map((c) => `.${CSS.escape(c)}`);
   for (const c of classes) out.push(tag + attrs + c);
   if (classes.length > 1) out.push(tag + attrs + classes.join(""));
@@ -102,12 +90,17 @@ function unique(tree: Tree, sel: string, el: Element): boolean {
   }
 }
 
-/** The shortest selector that finds `el` and nothing else in its tree; a path from the tree's top otherwise. */
+/**
+ * The shortest selector that finds `el` and nothing else in its tree; a path from the tree's top otherwise. The
+ * bare tag of `el` itself is not enough (but for a custom element): the only button now is one of many once a
+ * reply with its copy buttons is there.
+ */
 function selectorIn(el: Element): string {
   const tree = treeOf(el);
   const tail: string[] = [];
   for (let cur: Element | null = el; cur; cur = cur.parentElement) {
-    const vs = variants(cur);
+    const all = variants(cur);
+    const vs = cur === el && all.length > 1 && !el.localName.includes("-") ? all.slice(1) : all;
     for (const v of vs) {
       const sel = [v, ...tail].join(" > ");
       if (unique(tree, sel, el)) return sel;
@@ -129,9 +122,12 @@ function selectorIn(el: Element): string {
 
 const located = new WeakMap<Element, Locator>();
 
-/** How to find `el` again after a reload: a selector per tree, from the document down. */
-export function locatorOf(el: Element): Locator {
-  const known = located.get(el);
+/**
+ * How to find `el` again after a reload: a selector per tree, from the document down. Kept per element; `fresh`
+ * works it out again against the page as it is now (what is unique changes as the page fills).
+ */
+export function locatorOf(el: Element, fresh = false): Locator {
+  const known = fresh ? undefined : located.get(el);
   if (known) return known;
   const out: string[] = [];
   for (let cur: Element | null = el; cur; ) {
@@ -298,28 +294,21 @@ export function textNodesWith(root: Element, needle: string): Text[] {
 // ---------------------------------------------------------------------------------------------------------
 // Storage
 
-const KEY = "layouts";
-
 export async function loadLayout(site = location.origin): Promise<Layout | null> {
   try {
-    const all = ((await chrome.storage.local.get(KEY))[KEY] ?? {}) as Record<string, Layout>;
-    const l = all[site];
-    return l && l.v === 1 ? l : null;
+    return (await loadLayouts())[site] ?? null;
   } catch {
     return null;
   }
 }
 
 export async function saveLayout(layout: Layout | null, site = location.origin): Promise<void> {
-  const all = ((await chrome.storage.local.get(KEY))[KEY] ?? {}) as Record<string, Layout>;
-  if (layout) all[site] = layout;
-  else delete all[site];
-  await chrome.storage.local.set({ [KEY]: all });
+  await storeLayout(site, layout);
 }
 
 /** The layout of this site from a storage change, or undefined when the change does not touch it. */
 export function layoutChange(changes: Record<string, chrome.storage.StorageChange>, site = location.origin): Layout | null | undefined {
-  const c = changes[KEY];
+  const c = changes[LAYOUTS_KEY];
   if (!c) return undefined;
   const l = (c.newValue as Record<string, Layout> | undefined)?.[site];
   return l && l.v === 1 ? l : null;

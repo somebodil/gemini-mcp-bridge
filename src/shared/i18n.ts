@@ -161,6 +161,15 @@ const en = {
   optMaxChars: "Characters of tool output per message",
   optTimeout: "Time limit of a tool call (seconds)",
   optSaved: "Saved",
+  optLearned: "Learned pages",
+  optLearnedHelp:
+    "Chat pages other than Gemini that were learned (Learn this page, in the panel of the status button). Delete one and the extension guesses where things are there again, till it is learned again.",
+  optNoLearned: "No page learned yet.",
+  optLearnedAt: "learned {date}",
+  optParts: "{n} of {all} parts",
+  optMissing: "not found: {names}",
+  optPickedParts: "picked by hand: {names}",
+  optDelete: "Delete",
 } as const;
 
 type Key = keyof typeof en;
@@ -324,6 +333,14 @@ const ko: Record<Key, string> = {
   optMaxChars: "메시지 하나에 넣는 도구 출력의 글자 수",
   optTimeout: "도구 호출 시간 제한 (초)",
   optSaved: "저장됨",
+  optLearned: "학습한 페이지",
+  optLearnedHelp: "학습한 채팅 페이지 (Gemini 밖, 상태 버튼 패널의 「학습 시작」). 지우면 그 페이지에서는 다시 학습할 때까지 확장이 추측으로 동작합니다.",
+  optNoLearned: "학습한 페이지가 없습니다.",
+  optLearnedAt: "{date} 학습",
+  optParts: "{all}개 중 {n}개",
+  optMissing: "못 찾음: {names}",
+  optPickedParts: "직접 고름: {names}",
+  optDelete: "삭제",
 };
 
 function lang(): string {

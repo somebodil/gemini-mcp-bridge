@@ -56,7 +56,8 @@ export interface LearnResult {
 }
 
 export interface LearnView {
-  steps: { step: Step; state: "todo" | "now" | "done"; detail?: string }[];
+  /** skip: not seen, and learning was complete without it (a page that shows nothing while it writes). */
+  steps: { step: Step; state: "todo" | "now" | "done" | "skip"; detail?: string }[];
   /** Everything was seen: the user can stop. */
   complete: boolean;
 }
@@ -194,14 +195,15 @@ export class Learner {
   }
 
   private readonly onFocus = (e: FocusEvent) => {
-    if (!e.isTrusted || this.sent || this.ours(e)) return;
+    if (!e.isTrusted || this.sent || this.attempt || this.ours(e)) return;
     const ed = editableOf(deepTarget(e));
     if (ed) setTimeout(() => this.useInput(ed), 0);
   };
 
   /** The box the user clicked is the input box: the test message goes in, in place of what was there. */
   private useInput(ed: HTMLElement): void {
-    if (this.stopped || this.sent) return;
+    // not while a message is going out: the page empties the box before the next tick sees it went
+    if (this.stopped || this.sent || this.attempt) return;
     if (ed !== this.input || !valueOf(ed).includes(this.nonce)) {
       this.input = ed;
       this.inputLoc = locatorOf(ed);
@@ -407,6 +409,15 @@ export class Learner {
     });
   }
 
+  /**
+   * The writing indicator: a look that came and went. One that has not gone back yet only while the reply may
+   * still be written and it is a stop button; not one that stays (a send button greyed while the box is empty
+   * comes when the message goes out and stays after the reply: kept, the page would look busy for ever).
+   */
+  private busy(): Busy | undefined {
+    return this.busyCandidates().find((b) => b.ended || (!this.complete && STOP.test(b.look)));
+  }
+
   private finished(now: number): boolean {
     if (!this.parts || now - this.replyChangedAt < QUIET_MS) return false;
     const busy = this.busyCandidates();
@@ -420,7 +431,7 @@ export class Learner {
   // What the user sees
 
   view(): LearnView {
-    const busy = this.sent ? this.busyCandidates()[0] : undefined;
+    const busy = this.sent ? this.busy() : undefined;
     const done: Record<Step, boolean> = {
       input: !!this.input,
       send: !!this.sent,
@@ -440,7 +451,13 @@ export class Learner {
     };
     const firstOpen = STEPS.find((s) => !done[s]);
     return {
-      steps: STEPS.map((step) => ({ step, state: done[step] ? "done" : step === firstOpen ? "now" : "todo", detail: done[step] ? detail[step] || undefined : undefined })),
+      steps: STEPS.map((step) =>
+        done[step]
+          ? { step, state: "done", detail: detail[step] || undefined }
+          : this.complete
+            ? { step, state: "skip", detail: step === "busy" ? t("noteNoChange") : t("noteNotSeen") }
+            : { step, state: step === firstOpen ? "now" : "todo" },
+      ),
       complete: this.complete,
     };
   }
@@ -469,7 +486,7 @@ export class Learner {
     const now = Date.now();
     // the page may have drawn its messages anew since: the elements as they are now
     if (this.sent) this.scan(now);
-    const busy = this.busyCandidates()[0];
+    const busy = this.busy();
     this.detach();
     const layout: Layout = { v: 1, at: now };
     const roles: RoleResult[] = [];
@@ -477,25 +494,27 @@ export class Learner {
 
     const input = this.inputNow();
     if (input) {
-      layout.input = locatorOf(input);
+      layout.input = locatorOf(input, true);
       add("input", resolve(layout.input) === input ? "ok" : "unsure", input);
     } else add("input", "missing", null, t("noteNotSeen"));
 
     if (this.sent?.button) {
       const b = this.sent.button.isConnected ? this.sent.button : null;
-      layout.send = locatorOf(this.sent.button);
+      layout.send = locatorOf(this.sent.button, this.sent.button.isConnected);
       add("send", b && resolve(layout.send) === b ? "ok" : "unsure", b ?? resolve(layout.send));
     } else if (this.sent) {
       // sent with Enter: a button by the box named like a send button
       const key = [...this.sent.before.entries()].find(([, look]) => SEND.test(look) && !STOP.test(look) && look !== "absent" && look !== "hidden")?.[0];
-      const loc = key ? this.locators.get(key) : undefined;
+      const el = key ? this.elements.get(key) : undefined;
+      const loc = el?.isConnected ? locatorOf(el, true) : key ? this.locators.get(key) : undefined;
       if (loc) {
         layout.send = loc;
         add("send", "unsure", resolve(loc) ?? this.elements.get(key as string) ?? null, t("noteEnter"));
       } else add("send", "missing", null, t("noteEnter"));
     } else add("send", "missing", null, t("noteNotSeen"));
 
-    const busyLoc = busy ? this.locators.get(busy.key) : undefined;
+    const busyEl = busy ? this.elements.get(busy.key) : undefined;
+    const busyLoc = busy ? (busyEl?.isConnected ? locatorOf(busyEl, true) : this.locators.get(busy.key)) : undefined;
     if (busy && busyLoc) {
       layout.busy = { at: busyLoc, look: busy.look };
       add("busy", busy.ended ? "ok" : "unsure", resolve(busyLoc) ?? this.elements.get(busy.key) ?? null, busy.ended ? undefined : t("noteNotBack"));
@@ -510,7 +529,7 @@ export class Learner {
           break;
         }
       }
-      layout.list = locatorOf(list ?? p.lca);
+      layout.list = locatorOf(list ?? p.lca, true);
       add("list", list ? "ok" : "unsure", list ?? p.lca, list ? undefined : t("noteContainer"));
 
       const inside = (el: Element, limit = 3000) => [...deepElements(el)].slice(0, limit);

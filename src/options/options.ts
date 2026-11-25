@@ -1,9 +1,11 @@
-// The options page: servers, tool policies, behavior. Every change is saved at once, into the settings as they
-// are stored then: "Always allow" on Gemini's page may have changed others meanwhile.
+// The options page: servers, tool policies, behavior, and the chat pages that were learned. Every change is saved
+// at once, into the settings as they are stored then: "Always allow" on Gemini's page may have changed others
+// meanwhile.
 
 import { DEFAULT_URL, isLocalUrl, loadSettings, updateSettings, type BridgeState, type Policy, type Request, type ServerConfig, type Settings } from "../shared/config.ts";
 import { h } from "../shared/dom.ts";
 import { t } from "../shared/i18n.ts";
+import { LAYOUTS_KEY, loadLayouts, ROLES, storeLayout, type Role } from "../shared/layouts.ts";
 
 let settings: Settings;
 let state: BridgeState | undefined;
@@ -131,6 +133,29 @@ function renderTools(): void {
   box.replaceChildren(h("table", {}, h("tbody", {}, ...rows)));
 }
 
+/** The learned pages: each site with when it was learned, what of it was found, and Delete. */
+async function renderLayouts(): Promise<void> {
+  const box = document.getElementById("layouts");
+  if (!box) return;
+  const all = Object.entries(await loadLayouts()).sort(([a], [b]) => a.localeCompare(b));
+  if (!all.length) {
+    box.replaceChildren(h("p", { class: "muted" }, t("optNoLearned")));
+    return;
+  }
+  const names = (roles: readonly Role[]) => roles.map((r) => t(`role_${r}`)).join(", ");
+  const rows = all.map(([site, l]) => {
+    const found = ROLES.filter((r) => l[r] !== undefined);
+    const missing = ROLES.filter((r) => !found.includes(r));
+    const about = [t("optLearnedAt", { date: new Date(l.at).toLocaleString() }), t("optParts", { n: found.length, all: ROLES.length })];
+    if (missing.length) about.push(t("optMissing", { names: names(missing) }));
+    if (l.picked?.length) about.push(t("optPickedParts", { names: names(l.picked) }));
+    const del = h("button", {}, t("optDelete"));
+    del.addEventListener("click", () => void storeLayout(site, null));
+    return h("tr", { "data-site": site }, h("td", { class: "mono" }, site), h("td", { class: "muted small" }, about.join(" · ")), h("td", {}, del));
+  });
+  box.replaceChildren(h("table", {}, h("tbody", {}, ...rows)));
+}
+
 function render(): void {
   painters.length = 0;
   const addServer = h("button", {}, t("optAdd"));
@@ -161,8 +186,12 @@ function render(): void {
     settingRow("maxRounds", t("optMaxRounds")),
     settingRow("maxResultChars", t("optMaxChars")),
     settingRow("callTimeoutSec", t("optTimeout")),
+    h("h2", {}, t("optLearned")),
+    h("p", { class: "muted small" }, t("optLearnedHelp")),
+    h("div", { id: "layouts" }),
   );
   renderTools();
+  void renderLayouts();
 }
 
 async function main(): Promise<void> {
@@ -171,6 +200,7 @@ async function main(): Promise<void> {
   render();
   // a tool allowed on Gemini's page shows here at once (the rest of the page keeps what is being typed)
   chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === "local" && changes[LAYOUTS_KEY]) void renderLayouts();
     if (area !== "local" || !changes.settings) return;
     void loadSettings().then((fresh) => {
       settings = fresh;

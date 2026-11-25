@@ -461,7 +461,7 @@ export class Pill {
     const el = h("div", { class: "learn", role: "status" });
     const stack = h("div", { class: "stack" }, el);
     if (box.kind === "learning") {
-      const marks = { done: ["✓", "ok"], now: ["●", ""], todo: ["○", "muted"] } as const;
+      const marks = { done: ["✓", "ok"], now: ["●", ""], todo: ["○", "muted"], skip: ["–", "muted"] } as const;
       const steps = h("ol", { class: "steps" });
       for (const s of box.view.steps) {
         const [mark, cls] = marks[s.state];

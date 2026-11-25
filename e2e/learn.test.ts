@@ -9,7 +9,7 @@ import type { Page } from "playwright";
 import type { Layout } from "../src/content/layout.ts";
 import { MARK } from "../src/shared/protocol.ts";
 import { startHarness, type Harness } from "./harness.ts";
-import { box, button, learn, sendTest, startLearning } from "./learning.ts";
+import { box, button, closeResults, learn, sendTest, startLearning } from "./learning.ts";
 
 const MOCK = readFileSync(join(import.meta.dirname, "mock-chat.html"), "utf8");
 const SITE = "https://chat.example.test";
@@ -200,6 +200,41 @@ describe("learning a page", () => {
       assert.equal(await h.toggle(page), false);
       await page.waitForFunction(() => !document.querySelector("gmb-overlay") && !document.querySelector("gmb-status"));
     } finally {
+      await page.close();
+    }
+  });
+});
+
+describe("learned pages on the options page", () => {
+  it("lists each learned site with what was found; Delete makes its tabs guess again", async () => {
+    const other: Layout = { v: 1, at: Date.UTC(2026, 10, 1), input: ["textarea"], send: ["button"], list: ["main"], mine: "div.me", reply: "div.bot", picked: ["reply"] };
+    await h.worker.evaluate((l) => chrome.storage.local.set({ layouts: { "https://other.example.test": l } }), other);
+    const page = await open();
+    const id = new URL(h.worker.url()).host;
+    const options = await h.context.newPage();
+    try {
+      await learn(page);
+      await closeResults(page);
+      await options.goto(`chrome-extension://${id}/options.html`);
+      const row = (site: string) => options.locator(`#layouts tr[data-site="${site}"]`);
+      // the site learned just now is there, though the page was opened before
+      await row(SITE).waitFor();
+      assert.match((await row(SITE).textContent()) ?? "", /7 of 7 parts/);
+      const about = (await row("https://other.example.test").textContent()) ?? "";
+      assert.match(about, /5 of 7 parts/);
+      assert.match(about, /not found: Writing indicator, Code block/);
+      assert.match(about, /picked by hand: Reply/);
+      await page.locator("gmb-status .pill").click();
+      await page.locator('gmb-status [data-site="learned"]').waitFor();
+      await row(SITE).getByRole("button", { name: "Delete" }).click();
+      await row(SITE).waitFor({ state: "detached" });
+      assert.equal(await stored(), undefined);
+      // the open tab of the site follows
+      await page.locator('gmb-status [data-site="guessing"]').waitFor();
+      await row("https://other.example.test").getByRole("button", { name: "Delete" }).click();
+      await options.getByText("No page learned yet.").waitFor();
+    } finally {
+      await options.close();
       await page.close();
     }
   });
