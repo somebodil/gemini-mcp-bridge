@@ -29,7 +29,8 @@ jobs:
       - run: npm run check
       - run: npx playwright install --with-deps chromium
       - run: npm run zip
-      - run: node --test --test-concurrency=1 e2e/mock.test.ts
+      # the end-to-end tests use a test build of their own (dist/extension-test); the zip holds dist/extension
+      - run: npm run e2e
       - uses: actions/attest@v4
         with:
           subject-path: gemini-mcp-bridge-extension-${{ github.ref_name }}.zip
