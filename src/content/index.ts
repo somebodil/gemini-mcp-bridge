@@ -13,7 +13,7 @@ const scope = globalThis as { __gmbStop?: () => void };
 // put in a second time: the first one gives way
 scope.__gmbStop?.();
 // left behind by the extension before an update (another script world): its elements go too
-for (const el of document.querySelectorAll("gmb-status, gmb-card, gmb-overlay")) el.remove();
+for (const el of document.querySelectorAll("gmb-status, gmb-card, gmb-overlay, gmb-picker")) el.remove();
 
 /** With localStorage["gmb-generic"] = "1", gemini.google.com too is handled as an unknown page (for testing). */
 function chooseGeneric(): boolean {

@@ -25,8 +25,11 @@ export interface Layout {
   at: number;
   input?: Locator;
   send?: Locator;
-  /** What tells that the page is writing a reply: the element there looks like this (see lookOf). */
-  busy?: { at: Locator; look: string };
+  /**
+   * What tells that the page is writing a reply: the element there looks like `look` (learned while the page
+   * wrote), or (picked by hand while it did not write) its name is no longer `idle`.
+   */
+  busy?: { at: Locator; look?: string; idle?: string };
   list?: Locator;
   mine?: Pattern;
   reply?: Pattern;
@@ -235,6 +238,19 @@ export function lookOf(el: Element | null): string {
   const name = [...new Set(words)].join(" ").slice(0, 80);
   const disabled = (el as HTMLButtonElement).disabled || el.getAttribute("aria-disabled") === "true";
   return disabled ? `${name} [disabled]` : name;
+}
+
+/** A look without whether it is disabled (a send button is disabled while the box is empty, writing or not). */
+export const nameOnly = (look: string) => look.replace(/ \[disabled\]$/, "");
+
+/** The page writes, by the learned or picked indicator; undefined when the indicator is not on the page. */
+export function busyNow(busy: Layout["busy"]): boolean | undefined {
+  if (!busy) return undefined;
+  const el = resolve(busy.at);
+  if (busy.look !== undefined) return el || busy.look === "absent" ? lookOf(el) === busy.look : undefined;
+  if (!el || busy.idle === undefined) return undefined;
+  const look = lookOf(el);
+  return look !== "absent" && look !== "hidden" && nameOnly(look) !== busy.idle;
 }
 
 // ---------------------------------------------------------------------------------------------------------

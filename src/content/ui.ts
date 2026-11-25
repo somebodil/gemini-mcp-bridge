@@ -6,7 +6,7 @@ import type { BridgeState } from "../shared/config.ts";
 import { h, onTrustedClick } from "../shared/dom.ts";
 import { t } from "../shared/i18n.ts";
 import type { ParsedCall, ParseProblem } from "../shared/protocol.ts";
-import type { Role } from "./layout.ts";
+import { ROLES, type Role } from "./layout.ts";
 import type { Found, LearnView } from "./learn.ts";
 import { ROLE_COLOR, roleName } from "./overlay.ts";
 
@@ -221,7 +221,8 @@ export interface FlowView {
 /** The learning of the page as it goes, or what it learned. */
 export type LearnBox =
   | { kind: "learning"; view: LearnView }
-  | { kind: "results"; roles: { role: Role; found: Found; detail: string; note?: string }[]; saved: boolean };
+  | { kind: "results"; roles: { role: Role; found: Found; detail: string; note?: string }[]; saved: boolean; message?: string }
+  | { kind: "picking"; role: Role; current: string };
 
 export interface PillHandlers {
   /** The page is not gemini.google.com: the panel says so. */
@@ -236,6 +237,8 @@ export interface PillHandlers {
   onLearnCancel(): void;
   onShowLearned(): void;
   onCloseResults(): void;
+  onPick(role: Role): void;
+  onPickCancel(): void;
 }
 
 const PILL_SHEET = sheet(`${BASE_CSS}
@@ -256,11 +259,24 @@ const PILL_SHEET = sheet(`${BASE_CSS}
 .notice { position: absolute; right: 0; bottom: 44px; width: 300px; max-width: calc(100vw - 32px); padding: 10px 12px; border-radius: 12px;
   border: 1px solid var(--warn); background: var(--bg); display: grid; gap: 8px; box-shadow: 0 4px 16px rgba(0,0,0,.25); }
 label { display: flex; gap: 8px; align-items: center; cursor: pointer; }
-.learn { position: absolute; right: 0; bottom: 44px; width: 340px; max-width: calc(100vw - 32px); max-height: calc(100vh - 80px); overflow: auto;
+.stack { position: absolute; right: 0; bottom: 44px; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
+:host([data-down]) .stack { bottom: auto; top: 44px; flex-direction: column-reverse; }
+:host([data-left]) .stack { right: auto; left: 0; align-items: flex-start; }
+.learn { width: 360px; max-width: calc(100vw - 32px); max-height: calc(100vh - 80px); overflow: auto; box-sizing: border-box;
   padding: 12px; border-radius: 12px; border: 1px solid var(--accent); background: var(--bg); box-shadow: 0 4px 16px rgba(0,0,0,.25);
   display: grid; gap: 8px; }
-:host([data-down]) .learn { bottom: auto; top: 44px; }
-:host([data-left]) .learn { right: auto; left: 0; }
+.roles li { grid-template-columns: 18px 1fr auto; align-items: start; }
+.roles .detail { grid-column: 2 / 4; }
+.row-actions { display: flex; gap: 4px; }
+.row-actions button { padding: 1px 8px; font-size: 12px; }
+.row-actions button.q { padding: 1px 6px; min-width: 22px; }
+.help { width: 600px; max-width: calc(100vw - 32px); max-height: 50vh; overflow: auto; box-sizing: border-box; padding: 8px; border-radius: 12px;
+  border: 1px solid var(--line); background: var(--bg); box-shadow: 0 4px 16px rgba(0,0,0,.25); font-size: 12px; }
+.help table { border-collapse: collapse; width: 100%; }
+.help th, .help td { text-align: left; vertical-align: top; padding: 4px 6px; border-bottom: 1px solid var(--line); }
+.help th { color: var(--muted); font-weight: 600; }
+.help tr.this td { background: rgba(127,127,127,.16); font-weight: 600; }
+.help td:first-child { white-space: nowrap; }
 .title { font-weight: 600; }
 .steps, .roles { margin: 0; padding: 0; list-style: none; display: grid; gap: 4px; }
 .steps li, .roles li { display: grid; grid-template-columns: 18px 1fr; gap: 0 6px; }
@@ -423,8 +439,27 @@ export class Pill {
     return box;
   }
 
+  /** The table of what each part is, what to pick for it and what the extension does with it; `role`'s row stands out. */
+  private helpTable(role: Role | null): HTMLElement {
+    const head = h("tr", {}, ...["helpRole", "helpWhat", "helpSize", "helpUse"].map((k) => h("th", {}, t(k as "helpRole"))));
+    const rows = ROLES.map((r) => {
+      const swatch = h("span", { class: "swatch" });
+      swatch.style.setProperty("--c", ROLE_COLOR[r]);
+      return h(
+        "tr",
+        { class: r === role ? "this" : "", "data-role": r },
+        h("td", {}, swatch, roleName(r)),
+        h("td", {}, t(`help_${r}_what`)),
+        h("td", {}, t(`help_${r}_size`)),
+        h("td", {}, t(`help_${r}_use`)),
+      );
+    });
+    return h("div", { class: "help", role: "tooltip" }, h("table", {}, h("thead", {}, head), h("tbody", {}, ...rows)));
+  }
+
   private learnBox(box: LearnBox): HTMLElement {
     const el = h("div", { class: "learn", role: "status" });
+    const stack = h("div", { class: "stack" }, el);
     if (box.kind === "learning") {
       const marks = { done: ["✓", "ok"], now: ["●", ""], todo: ["○", "muted"] } as const;
       const steps = h("ol", { class: "steps" });
@@ -445,28 +480,61 @@ export class Pill {
       el.append(
         h("div", { class: "buttons" }, this.button(t("learnStop"), () => this.handlers.onLearnStop(), box.view.complete), this.button(t("learnCancel"), () => this.handlers.onLearnCancel())),
       );
-      return el;
+      return stack;
     }
+    if (box.kind === "picking") {
+      el.classList.add("picking");
+      el.append(
+        h("div", { class: "title" }, t("pickTitle", { role: roleName(box.role) })),
+        h("div", { class: "small" }, t("pickKeys")),
+        h("div", { class: "small" }, h("b", {}, `${t("helpWhat")}: `), t(`help_${box.role}_what`)),
+        h("div", { class: "small" }, h("b", {}, `${t("helpSize")}: `), t(`help_${box.role}_size`)),
+        h("div", { class: "small muted current" }, box.current || t("pickNone")),
+        h("div", { class: "buttons" }, this.button(t("learnCancel"), () => this.handlers.onPickCancel())),
+      );
+      return stack;
+    }
+    // the table above the box while the pointer is on a (?) (or a click keeps it)
+    const help = this.helpTable(null);
+    help.hidden = true;
+    let pinned: Role | null = null;
+    const showHelp = (role: Role | null) => {
+      help.hidden = role === null;
+      for (const tr of help.querySelectorAll("tbody tr")) tr.classList.toggle("this", (tr as HTMLElement).dataset.role === role);
+    };
+    stack.prepend(help);
     const marks: Record<Found, [string, string]> = { ok: ["✓", "ok"], unsure: ["?", "warn"], missing: ["✗", "err"] };
     const roles = h("ul", { class: "roles" });
     for (const r of box.roles) {
       const [mark, cls] = marks[r.found];
       const swatch = h("span", { class: "swatch" });
       swatch.style.setProperty("--c", ROLE_COLOR[r.role]);
+      const q = h("button", { class: "q", "aria-label": t("pickHelp"), title: t("pickHelp") }, "?");
+      q.addEventListener("mouseenter", () => showHelp(r.role));
+      q.addEventListener("focus", () => showHelp(r.role));
+      q.addEventListener("mouseleave", () => showHelp(pinned));
+      q.addEventListener("blur", () => showHelp(pinned));
+      onTrustedClick(q, () => {
+        pinned = pinned === r.role ? null : r.role;
+        showHelp(pinned ?? r.role);
+      });
       roles.append(
         h(
           "li",
           { "data-role": r.role, "data-found": r.found },
           h("span", { class: `mark ${cls}` }, mark),
           h("span", {}, swatch, roleName(r.role)),
+          h("span", { class: "row-actions" }, this.button(t("pick"), () => this.handlers.onPick(r.role)), q),
           r.detail ? h("span", { class: "detail" }, r.detail) : null,
           r.note ? h("span", { class: "detail" }, r.note) : null,
         ),
       );
     }
-    el.append(h("div", { class: "title" }, t("resultsTitle")), roles, h("div", { class: "small muted" }, box.saved ? t("resultsHint") : t("resultsNothing")));
+    el.append(h("div", { class: "title" }, t("resultsTitle")), roles);
+    if (box.message) el.append(h("div", { class: "small warn" }, box.message));
+    el.append(h("div", { class: "small muted" }, box.saved ? t("resultsHint") : t("resultsNothing")));
     el.append(h("div", { class: "buttons" }, this.button(t("learnAgain"), () => this.handlers.onLearnStart()), this.button(t("learnClose"), () => this.handlers.onCloseResults(), true)));
-    return el;
+    return stack;
   }
 
   private panel(state: BridgeState | null, chatOn: boolean, site: PillView["site"]): HTMLElement {

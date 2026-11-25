@@ -18,7 +18,7 @@
 // elements are not on the page (the page changed), it guesses as above.
 
 import { looksLikeCall, MARK, parseCalls } from "../shared/protocol.ts";
-import { contains, deepText, findAll, letters, lookOf, matchesPattern, resolve, type Layout } from "./layout.ts";
+import { busyNow, contains, deepText, findAll, letters, matchesPattern, resolve, type Layout } from "./layout.ts";
 import {
   buttonOf,
   dbg,
@@ -273,13 +273,10 @@ export class GenericPage implements Page {
     return !!b && STOP.test(nameOf(b));
   }
 
-  /** The learned writing indicator looks as it did while the page wrote; without one, a stop button near the input box. */
+  /** By the learned writing indicator where the page has it; else a stop button near the input box. */
   private isGenerating(): boolean {
-    const busy = this.layout?.busy;
-    if (busy) {
-      const el = resolve(busy.at);
-      if (el || busy.look === "absent") return lookOf(el) === busy.look;
-    }
+    const learned = busyNow(this.layout?.busy);
+    if (learned !== undefined) return learned;
     const ed = this.editor();
     return !!ed && buttonNear(ed, STOP) !== null;
   }

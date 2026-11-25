@@ -10,12 +10,14 @@
 
 import { t } from "../shared/i18n.ts";
 import {
+  busyNow,
   contains,
   deepText,
   findAll,
   letters,
   locatorOf,
   lookOf,
+  nameOnly,
   patternOf,
   resolve,
   ROLES,
@@ -551,8 +553,44 @@ export function checkLayout(layout: Layout): RoleResult[] {
     return all.length ? { role, found: "ok", el: all.at(-1) as Element, note: t("noteCount", { n: all.length }) } : { role, found: "missing", el: null, note: t("noteNotOnPage") };
   };
   const busy = one("busy", layout.busy?.at);
-  if (busy.el && layout.busy) busy.note = lookOf(busy.el) === layout.busy.look ? t("noteBusyNow") : t("noteIdleNow");
-  return [one("input", layout.input), one("send", layout.send), busy, one("list", layout.list), kind("mine", layout.mine), kind("reply", layout.reply), kind("code", layout.code)];
+  if (busy.el) busy.note = busyNow(layout.busy) ? t("noteBusyNow") : t("noteIdleNow");
+  const all = [one("input", layout.input), one("send", layout.send), busy, one("list", layout.list), kind("mine", layout.mine), kind("reply", layout.reply), kind("code", layout.code)];
+  for (const r of all) if (layout.picked?.includes(r.role)) r.note = r.note ? `${r.note} · ${t("notePicked")}` : t("notePicked");
+  return all;
+}
+
+/** The layout with `role` set from an element the user picked on the page; or why it cannot be. */
+export function withPicked(layout: Layout | null, role: Role, el: Element): { layout: Layout } | { error: string } {
+  const l: Layout = layout ? { ...layout } : { v: 1, at: Date.now() };
+  const list = resolve(l.list) ?? document.body;
+  switch (role) {
+    case "input": {
+      // a box around the input box is fine too: the box one can write in inside it
+      const ed = editableOf(el) ?? [...deepElements(el)].map((x) => editableOf(x)).find((x) => x) ?? null;
+      if (!ed) return { error: t("pickNotEditable") };
+      l.input = locatorOf(ed);
+      break;
+    }
+    case "send":
+      l.send = locatorOf(pressable(el));
+      break;
+    case "busy":
+      l.busy = { at: locatorOf(el), idle: nameOnly(lookOf(el)) };
+      break;
+    case "list":
+      l.list = locatorOf(el);
+      break;
+    default: {
+      // not the other kinds, nor the elements around it (one message must not be matched twice)
+      const others = role === "mine" ? findAll(l.reply, list) : role === "reply" ? findAll(l.mine, list) : [...findAll(l.mine, list), ...findAll(l.reply, list)];
+      const p = patternOf(el, [...chain(el).slice(1), ...others.filter((o) => o !== el && !contains(o, el))]);
+      if (!p) return { error: t("pickNoPattern") };
+      l[role] = p;
+    }
+  }
+  l.at = Date.now();
+  l.picked = [...new Set([...(l.picked ?? []), role])];
+  return { layout: l };
 }
 
 /** What to outline on the page for a layout: each role's element, and every element of each kind. */

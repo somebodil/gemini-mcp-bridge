@@ -8,9 +8,10 @@ import type { BridgeState, CallReply, ExposedTool, Request } from "../shared/con
 import { t } from "../shared/i18n.ts";
 import { buildInstructions, buildToolsUpdate, formatResults, toolsHash, type Outcome, type ParsedCall } from "../shared/protocol.ts";
 import { noSuchTool } from "../shared/tools.ts";
-import { layoutChange, loadLayout, saveLayout, type Layout } from "./layout.ts";
-import { checkLayout, Learner, outlineItems, type RoleResult } from "./learn.ts";
+import { layoutChange, loadLayout, saveLayout, type Layout, type Role } from "./layout.ts";
+import { checkLayout, Learner, outlineItems, withPicked, type RoleResult } from "./learn.ts";
 import { Overlay } from "./overlay.ts";
+import { Picker } from "./picker.ts";
 import { dbg, describe, pageStructure, type Finished, type Page } from "./page.ts";
 import { installPageStyle, pageIsDark, Pill, removePageStyle, setTheme, type FlowView, type LearnBox, type Notice, type Row } from "./ui.ts";
 
@@ -53,8 +54,11 @@ export function startBridge(page: Page): () => void {
   let layout: Layout | null = null;
   /** While the user teaches the page: the extension only watches. */
   let learner: Learner | null = null;
-  /** What it learned, shown until the user closes it. */
-  let results: { roles: RoleResult[]; saved: boolean } | null = null;
+  /** What it learned, shown until the user closes it (with why the last pick did not work, if it did not). */
+  let results: { roles: RoleResult[]; saved: boolean; message?: string } | null = null;
+  /** While the user picks a part on the page by hand. */
+  let picker: Picker | null = null;
+  let picking: { role: Role; current: string } | null = null;
   const overlay = new Overlay();
   let flow: Flow | null = null;
   let lastFlowText = "";
@@ -92,6 +96,8 @@ export function startBridge(page: Page): () => void {
       overlay.hide();
       render();
     },
+    onPick: (role) => startPicking(role),
+    onPickCancel: () => stopPicking(),
   });
 
   // -------------------------------------------------------------------------------------------------------
@@ -294,12 +300,14 @@ export function startBridge(page: Page): () => void {
   }
 
   function onKeyDown(e: KeyboardEvent): void {
+    // while picking, keys belong to the picker
+    if (picker) return;
     if (e.key !== "Enter" || e.shiftKey || e.isComposing || e.keyCode === 229 || !e.isTrusted) return;
     if (page.isSendKey(e)) onUserSend(e);
   }
 
   function onClick(e: MouseEvent): void {
-    if (!e.isTrusted) return;
+    if (!e.isTrusted || picker) return;
     if (page.isStopClick(e)) {
       userStopped = true;
       if (flow) flow = { stage: "stopped", at: Date.now() };
@@ -586,6 +594,7 @@ export function startBridge(page: Page): () => void {
 
   function startLearning(): void {
     if (page.kind !== "generic" || stopped) return;
+    stopPicking();
     results = null;
     overlay.hide();
     learner?.cancel();
@@ -620,12 +629,56 @@ export function startBridge(page: Page): () => void {
     render();
   }
 
+  function startPicking(role: Role): void {
+    if (page.kind !== "generic" || stopped) return;
+    picker?.close();
+    picking = { role, current: "" };
+    picker = new Picker(
+      role,
+      (el) => {
+        if (picking) picking.current = el ? describe(el).slice(0, 80) : "";
+        render();
+      },
+      (el) => {
+        picker = null;
+        picking = null;
+        if (el) applyPick(role, el);
+        render();
+      },
+    );
+    render();
+  }
+
+  function stopPicking(): void {
+    picker?.close();
+    picker = null;
+    picking = null;
+    render();
+  }
+
+  /** The part the user picked goes into the layout of the site, and the list and outlines show it. */
+  function applyPick(role: Role, el: Element): void {
+    const r = withPicked(layout, role, el);
+    if ("error" in r) {
+      results = { roles: results?.roles ?? (layout ? checkLayout(layout) : []), saved: !!layout, message: r.error };
+      return;
+    }
+    const l = r.layout;
+    setLayout(l);
+    void saveLayout(l).catch((err) => dbg("could not keep the layout", err));
+    results = { roles: checkLayout(l), saved: true };
+    overlay.show(() => outlineItems(l));
+    dbg("picked", role, l);
+  }
+
   function learnBox(): LearnBox | null {
     if (learner) return { kind: "learning", view: learner.view() };
+    if (picking) return { kind: "picking", role: picking.role, current: picking.current };
     if (!results) return null;
     return {
       kind: "results",
       saved: results.saved,
+      message: results.message,
       roles: results.roles.map((r) => ({ role: r.role, found: r.found, detail: r.el ? describe(r.el).slice(0, 80) : "", note: r.note })),
     };
   }
@@ -673,6 +726,8 @@ export function startBridge(page: Page): () => void {
     run?.abort();
     learner?.cancel();
     learner = null;
+    picker?.close();
+    picker = null;
     overlay.hide();
     page.stop();
     pill.host.remove();
