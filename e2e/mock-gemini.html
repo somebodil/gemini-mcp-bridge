@@ -1,0 +1,118 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Mock Gemini</title>
+    <style>
+      body { font: 14px sans-serif; margin: 0; padding: 16px 16px 120px; background: #fff; }
+      user-query, model-response { display: block; margin: 12px 0; }
+      user-query { text-align: right; }
+      pre { background: #111; color: #eee; padding: 8px; }
+      .input { position: fixed; left: 16px; right: 16px; bottom: 16px; display: flex; gap: 8px; }
+      rich-textarea { flex: 1; display: block; border: 1px solid #999; min-height: 24px; }
+      .ql-editor { outline: none; padding: 4px; }
+    </style>
+  </head>
+  <body>
+    <div id="chat"></div>
+    <div class="input">
+      <rich-textarea><div class="ql-editor ql-blank" contenteditable="true"><p><br /></p></div></rich-textarea>
+      <div class="send-button submit"><button aria-label="Send message">Send</button></div>
+    </div>
+    <script>
+      // The parts of gemini.google.com the extension relies on, and one behavior of its Quill editor: the text
+      // that is sent is the editor's model, which follows the box only after a MutationObserver ran.
+      window.__sent = [];
+      window.__replies = window.__replies || [];
+      const chat = document.getElementById("chat");
+      const ed = document.querySelector(".ql-editor");
+      const sb = document.querySelector(".send-button");
+      let model = "";
+      // like Quill: one line per paragraph
+      const lines = () => {
+        const blocks = [...ed.children].filter((c) => c.tagName === "P" || c.tagName === "DIV");
+        return blocks.length ? blocks.map((b) => b.textContent).join("\n") : ed.textContent;
+      };
+      new MutationObserver(() => {
+        model = lines();
+        ed.classList.toggle("ql-blank", !model.trim());
+      }).observe(ed, { subtree: true, childList: true, characterData: true });
+
+      function send() {
+        const text = model.trim();
+        if (!text) return;
+        window.__sent.push(text);
+        ed.innerHTML = "<p><br></p>";
+        model = "";
+        addQuery(text);
+        if (!/\/app\/[0-9a-f]{8,}/.test(location.pathname)) history.pushState({}, "", "/app/0123456789abcdef");
+        sb.classList.replace("submit", "stop");
+        const reply = window.__replies.shift() ?? "Nothing more to say.";
+        const chatNow = window.__chatGen;
+        setTimeout(() => {
+          sb.classList.replace("stop", "submit");
+          // the user went to another chat meanwhile: the reply belongs to the old one
+          if (chatNow === window.__chatGen) addResponse(reply);
+        }, window.__delay ?? 500);
+      }
+      window.__chatGen = 0;
+      // like opening another conversation from the sidebar: other address, other messages
+      window.__openOld = (messages) => {
+        window.__chatGen++;
+        chat.replaceChildren();
+        history.pushState({}, "", "/app/fedcba9876543210");
+        for (const m of messages) (m.user ? addQuery(m.user) : window.addResponse(m.model));
+      };
+      ed.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && !e.shiftKey) {
+          e.preventDefault();
+          send();
+        }
+      });
+      sb.querySelector("button").addEventListener("click", () => {
+        if (!sb.classList.contains("stop")) send();
+      });
+
+      function addQuery(text) {
+        const q = document.createElement("user-query");
+        const box = document.createElement("div");
+        box.className = "query-text";
+        for (const line of text.split("\n")) {
+          const p = document.createElement("p");
+          p.className = "query-text-line";
+          p.textContent = line;
+          box.append(p);
+        }
+        q.append(box);
+        chat.append(q);
+      }
+
+      let n = 0;
+      window.addResponse = function addResponse(md) {
+        const r = document.createElement("model-response");
+        const mc = document.createElement("message-content");
+        mc.id = `message-content-id-r_${(++n).toString(16).padStart(8, "0")}${Math.random().toString(16).slice(2, 8)}`;
+        const parts = md.split(/```[a-z]*\n([\s\S]*?)```/);
+        parts.forEach((part, i) => {
+          if (i % 2) {
+            const cb = document.createElement("code-block");
+            const pre = document.createElement("pre");
+            const code = document.createElement("code");
+            code.setAttribute("data-test-id", "code-content");
+            code.textContent = part;
+            pre.append(code);
+            cb.append(pre);
+            mc.append(cb);
+          } else if (part.trim()) {
+            const p = document.createElement("p");
+            p.textContent = part.trim();
+            mc.append(p);
+          }
+        });
+        r.append(mc);
+        chat.append(r);
+      };
+      for (const md of window.__initial || []) window.addResponse(md);
+    </script>
+  </body>
+</html>

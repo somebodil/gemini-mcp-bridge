@@ -1,0 +1,26 @@
+name: Check
+
+# Types, lint, unit tests, the build, and the extension in Chromium against a mock of Gemini's page:
+# on every push, so that what is in the repository is known to work before a release is asked for.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run check
+      - run: npx playwright install --with-deps chromium
+      - run: npm run build
+      - run: node --test --test-concurrency=1 e2e/mock.test.ts
