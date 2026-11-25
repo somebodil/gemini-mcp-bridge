@@ -15,11 +15,13 @@ import {
   buildInstructions,
   buildToolsUpdate,
   formatResults,
+  looksLikeCall,
   MARK,
   parseCalls,
   resultsEnd,
   summarizeResults,
   toolsHash,
+  TOOLS_HEADING,
   type Outcome,
   type ParsedCall,
 } from "../shared/protocol.ts";
@@ -376,7 +378,7 @@ function decorate(generating: boolean): void {
     const id = G.responseId(resp, i);
     const live = id === awaitedId || (generating && i === list.length - 1 && !handled.has(id) && !!expecting && !expecting.before.has(id));
     G.codeBlocks(resp)
-      .filter((b) => b.text.includes("mcp_call"))
+      .filter((b) => looksLikeCall(b.text))
       .forEach((b, j) => {
         const key = `${id}#${j}`;
         let card = cards.get(key);
@@ -410,7 +412,9 @@ function decorate(generating: boolean): void {
     if (start < 0) continue;
     const end = texts.indexOf(MARK.instructionsEnd, start);
     const block = lines.slice(start, end < 0 ? undefined : end + 1);
-    const count = texts.slice(start, end < 0 ? undefined : end).filter((x) => /^- \S+: /.test(x)).length;
+    const block_ = texts.slice(start, end < 0 ? undefined : end);
+    const heading = block_.findIndex((x) => x.startsWith(TOOLS_HEADING));
+    const count = heading < 0 ? 0 : block_.slice(heading + 1).filter((x) => /^- \S+: /.test(x)).length;
     collapse(box, block, texts[start].startsWith(MARK.instructions) ? t("chipInstructions", { n: count }) : t("chipUpdate"));
     // results that waited for the user's message come after the instructions in the same message
     const r = texts.findIndex((x, k) => k > (end < 0 ? start : end) && x.startsWith(MARK.results));
@@ -434,7 +438,7 @@ function itemsOf(resp: HTMLElement, id: string): Item[] {
   const items: Item[] = [];
   let j = 0;
   for (const b of G.codeBlocks(resp)) {
-    if (!b.text.includes("mcp_call")) continue;
+    if (!looksLikeCall(b.text)) continue;
     const parsed = parseCalls([b.text]);
     let card = cards.get(`${id}#${j}`);
     if (!card) {

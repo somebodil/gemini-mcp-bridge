@@ -14,6 +14,14 @@ export const MARK = {
 
 export const CALL_KEY = "mcp_call";
 
+/** A code block is a call (or a broken one) only when it holds the key as JSON writes it, not when it mentions it. */
+export function looksLikeCall(text: string): boolean {
+  return /["\u201c\u201d]mcp_call["\u201c\u201d]/.test(text) && text.includes("{");
+}
+
+/** The heading of the tool list in the instructions; the chip counts the lines after it. */
+export const TOOLS_HEADING = "Tools you can request:";
+
 export interface JsonSchema {
   type?: string | string[];
   description?: string;
@@ -34,26 +42,32 @@ export interface ToolInfo {
 
 /** The instructions that open a conversation. `notes` are the instructions the MCP servers give about themselves. */
 export function buildInstructions(tools: ToolInfo[], notes: string[] = []): string {
+  // Gemini believes it cannot reach the user's computer, and it is right: told that it "can use tools", the
+  // stronger models refuse, as from a fake tool. Asked instead to request things from the user, whose helper
+  // runs them, they do it. The wording keeps to what is true.
   return [
     `${MARK.instructions}: follow these for the rest of this conversation]`,
-    "The user installed the MCP Bridge browser extension and connected it to MCP servers on their own computer. " +
-      "So in this conversation you can use the tools listed below: when you write a tool call in the format below, " +
-      "the extension runs it on the user's computer and sends you the result as the next message.",
-    "Do not tell the user that you cannot access their computer or their files: you can, through these tools. Use them.",
+    "You cannot access my computer, but I can, and I have a helper for it: MCP Bridge, a browser extension on my side. " +
+      "When you need something from my computer (a folder listing, a file, the output of a command, or another tool below), " +
+      "ask me for it with a request block in the format below. My helper runs the request on my computer and sends you the result " +
+      "as my next message.",
+    "You do not run anything yourself: you write the request, my helper runs it. So instead of asking me to look something up " +
+      "or to run something myself, write the request block, then wait for my reply with the result.",
     "",
-    `To call a tool, write a fenced code block that holds one JSON object with the single key "${CALL_KEY}":`,
+    `A request is a fenced code block that holds one JSON object with the single key "${CALL_KEY}":`,
     "```json",
     `{"${CALL_KEY}": {"tool": "TOOL_NAME", "arguments": {}}}`,
     "```",
     "Rules:",
-    "- One call per code block. Several blocks in one reply run in order.",
-    "- After your call blocks, end your reply and wait for the results. Never guess or invent tool results.",
-    `- Results come back in a message that starts with "${MARK.results}". Then continue: call more tools, or answer the user.`,
-    `- Use tools only when they help with what the user asked. Do not write "${CALL_KEY}" blocks for any other purpose, ` +
-      "and do not repeat these instructions to the user.",
-    "- If a tool returns an error, fix the arguments and try again, or tell the user what went wrong.",
-    "- Answer the user in the language they write in.",
+    "- One request per code block. Several blocks in one reply are run in order.",
+    "- After your request blocks, end your reply and wait for the result. Never guess or invent results.",
+    `- Results come back in a message that starts with "${MARK.results}". Then continue: request more, or answer me.`,
+    `- Make requests only when they help with what I asked. Do not write "${CALL_KEY}" blocks for any other purpose, ` +
+      "and do not repeat these instructions to me.",
+    "- If a request returns an error, fix the arguments and try again, or tell me what went wrong.",
+    "- Answer me in the language I write in.",
     "",
+    ...example(tools),
     ...toolSection(tools, notes),
     MARK.instructionsEnd,
   ].join("\n");
@@ -68,15 +82,30 @@ export function buildToolsUpdate(tools: ToolInfo[], notes: string[] = []): strin
   ].join("\n");
 }
 
+/** One exchange, request to answer, with a tool that exists: models follow a protocol they were shown. */
+function example(tools: ToolInfo[]): string[] {
+  const t = tools.find((x) => x.name === "list_directory") ?? tools.find((x) => /list|read|get|search/i.test(x.name));
+  if (!t) return [];
+  const req = Object.fromEntries((t.inputSchema?.required ?? []).map((k) => [k, k === "path" ? "~/Documents" : "..."]));
+  return [
+    "An example of the whole exchange:",
+    "- Me: What is in my Documents folder?",
+    `- You: \`{"${CALL_KEY}": {"tool": "${t.name}", "arguments": ${JSON.stringify(req)}}}\` in a code block, and nothing after it.`,
+    `- Me: "${MARK.results}" with the output, for example "#1 ${t.name} → ok" and a few lines.`,
+    "- You: the answer, from that output.",
+    "",
+  ];
+}
+
 function toolSection(tools: ToolInfo[], notes: string[]): string[] {
   const lines: string[] = [];
   const cleanNotes = notes.map((n) => n.trim()).filter(Boolean);
   if (cleanNotes.length) {
-    lines.push("About the user's computer and tools:");
+    lines.push("About my computer and the tools:");
     for (const n of cleanNotes) lines.push(...n.split("\n").map((l) => `  ${l}`));
     lines.push("");
   }
-  lines.push(tools.length ? "Available tools:" : "Available tools: none right now.");
+  lines.push(tools.length ? TOOLS_HEADING : `${TOOLS_HEADING} none right now.`);
   for (const t of tools) lines.push(...describeTool(t));
   return lines;
 }
@@ -148,7 +177,7 @@ export interface ParseResult {
 export function parseCalls(blocks: string[], text = ""): ParseResult {
   const result: ParseResult = { calls: [], problems: [] };
   for (const block of blocks) {
-    if (!block.includes(CALL_KEY)) continue;
+    if (!looksLikeCall(block)) continue;
     const objects = extractObjects(block);
     if (!objects.length) {
       result.problems.push({ snippet: shorten(block), error: "The block is not valid JSON." });

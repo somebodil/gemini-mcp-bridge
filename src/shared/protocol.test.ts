@@ -36,11 +36,18 @@ describe("instructions", () => {
     assert.ok(s.endsWith(MARK.instructionsEnd));
     assert.match(s, /- read_file: Read a text file\. Lines are numbered\./);
     assert.match(s, /- ping: \(no description\)\n {2}arguments: \{\}/);
-    assert.match(s, /About the user's computer and tools:\n {2}OS: macOS/);
+    assert.match(s, /About my computer and the tools:\n {2}OS: macOS/);
+    // asks for requests to the user's helper, and shows one exchange with a tool that exists
+    assert.match(s, /You cannot access my computer, but I can/);
+    assert.match(s, /- You: `\{"mcp_call": \{"tool": "read_file", "arguments": \{"path":"~\/Documents"\}\}\}`/);
+  });
+
+  it("shows no example when no tool fits one", () => {
+    assert.doesNotMatch(buildInstructions([{ name: "ping" }]), /An example/);
   });
 
   it("says so when there is no tool", () => {
-    assert.match(buildToolsUpdate([]), /Available tools: none right now\./);
+    assert.match(buildToolsUpdate([]), /Tools you can request: none right now\./);
   });
 
   it("writes a compact signature with optional marks and parameter descriptions", () => {
@@ -64,8 +71,8 @@ describe("parseCalls", () => {
     assert.deepEqual(r, { calls: [{ tool: "read_file", arguments: { path: "/a" } }], problems: [] });
   });
 
-  it("ignores code blocks without the key", () => {
-    assert.deepEqual(parseCalls(['{"tool": "x"}', "print('hi')"]), { calls: [], problems: [] });
+  it("ignores code blocks without the key, and blocks that only mention it", () => {
+    assert.deepEqual(parseCalls(['{"tool": "x"}', "print('hi')", "the mcp_call blocks", "mcp_call"]), { calls: [], problems: [] });
   });
 
   it("accepts the near misses", () => {

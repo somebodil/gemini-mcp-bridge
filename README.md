@@ -82,6 +82,7 @@ npm run check     # types, lint, unit tests (the MCP client against servers made
 npm run build     # dist/extension: load it with "Load unpacked"
 npm run e2e       # the built extension in Chromium against a mock of Gemini's page
 npm run e2e:live  # against the real gemini.google.com, signed out
+node e2e/obey.ts  # how often each Gemini model follows the instructions (after changing their wording)
 ```
 
 With `localStorage["gmb-debug"] = "1"` on gemini.google.com, the extension writes its steps to the console.
