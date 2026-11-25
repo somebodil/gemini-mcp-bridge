@@ -46,7 +46,7 @@ npx gemini-mcp-bridge-server
 The first start makes a config file with a random token and prints what the extension needs:
 
 ```
-gemini-mcp-bridge-server 0.1.0
+gemini-mcp-bridge-server 0.2.0
   URL:    http://127.0.0.1:7341/mcp
   Token:  3q2-...
   Config: /home/you/.config/gemini-mcp-bridge-server/config.json (new)
