@@ -4,17 +4,31 @@
 
 import { DEFAULT_URL, isLocalUrl, loadSettings, updateSettings, type BridgeState, type Policy, type Request, type ServerConfig, type Settings } from "../shared/config.ts";
 import { h } from "../shared/dom.ts";
-import { t } from "../shared/i18n.ts";
+import { t, type Key } from "../shared/i18n.ts";
 import { LAYOUTS_KEY, loadLayouts, ROLES, storeLayout, type Role } from "../shared/layouts.ts";
+import { allowedOn, GEMINI_SITE, originOf, own, readSites } from "../shared/sites.ts";
 
 let settings: Settings;
 let state: BridgeState | undefined;
 const app = document.getElementById("app") as HTMLElement;
 /** Repaints the status line of each server once the service worker answered. */
 const painters: (() => void)[] = [];
+/** Per tool: what is typed in its box of sites and not saved yet, and what its last check said. They outlive a
+ * repaint of the table (a tool allowed on a chat page meanwhile). */
+const drafts = new Map<string, string>();
+const checks = new Map<string, { text: string; bad?: boolean }[]>();
+const GEMINI = "https://gemini.google.com";
+let tryAddress = GEMINI;
 
 async function update(change: (s: Settings) => void): Promise<void> {
-  settings = await updateSettings(change);
+  const before = JSON.stringify(settings);
+  let others = false;
+  settings = await updateSettings((fresh) => {
+    // changed elsewhere meanwhile ("Always allow" on a chat page): the change event of that may come too late
+    others = JSON.stringify(fresh) !== before;
+    change(fresh);
+  });
+  if (others) renderTools();
   const s = document.getElementById("saved");
   if (s) {
     s.textContent = t("optSaved");
@@ -124,13 +138,112 @@ function renderTools(): void {
       ["off", t("optOff")],
     ] as const) {
       const o = h("option", { value: v }, label);
-      if ((settings.policies[tool.name] ?? "ask") === v) o.selected = true;
+      if ((own(settings.policies, tool.name) ?? "ask") === v) o.selected = true;
       select.append(o);
     }
-    select.addEventListener("change", () => void update((s) => void (s.policies[tool.name] = select.value as Policy)));
-    return h("tr", {}, h("td", { class: "mono" }, tool.name), h("td", {}, select), h("td", { class: "muted small" }, (tool.description ?? "").slice(0, 200)));
+    select.addEventListener("change", () => {
+      // the box of sites shows only under an "Auto" tool; a tool that leaves Auto forgets its sites
+      drafts.delete(tool.name);
+      checks.delete(tool.name);
+      void update((s) => void (s.policies[tool.name] = select.value as Policy)).then(renderTools);
+    });
+    const auto = settings.policies[tool.name] === "auto";
+    const row = h("tr", auto ? { class: "has-sites" } : {}, h("td", { class: "mono" }, tool.name), h("td", {}, select), h("td", { class: "muted small" }, (tool.description ?? "").slice(0, 200)));
+    return auto ? [row, sitesRow(tool.name)] : [row];
   });
-  box.replaceChildren(h("table", {}, h("tbody", {}, ...rows)));
+  const anyAuto = rows.some((r) => r.length > 1);
+  const address = h("input", { type: "text", class: "try", value: tryAddress, "aria-label": t("optTryAddress"), placeholder: GEMINI, spellcheck: "false", "data-key": "try" });
+  address.addEventListener("input", () => (tryAddress = address.value));
+  // the box being typed in is drawn anew: the focus and the caret go to the new one
+  const was = document.activeElement;
+  const key = was instanceof HTMLElement && box.contains(was) ? was.dataset.key : undefined;
+  const caret = was instanceof HTMLTextAreaElement || was instanceof HTMLInputElement ? [was.selectionStart ?? 0, was.selectionEnd ?? 0] : [0, 0];
+  box.replaceChildren(
+    ...(anyAuto ? [h("p", { class: "muted small" }, t("optSitesHelp")), h("label", { class: "line small" }, t("optTryAddress"), address)] : []),
+    h("table", {}, h("tbody", {}, ...rows.flat())),
+  );
+  const now = key ? box.querySelector<HTMLTextAreaElement | HTMLInputElement>(`[data-key="${CSS.escape(key)}"]`) : null;
+  if (now) {
+    now.focus();
+    now.setSelectionRange(caret[0], caret[1]);
+  }
+}
+
+const RE_ERRORS: Record<string, Key> = {
+  "Unterminated group": "reUnterminatedGroup",
+  "Unmatched ')'": "reUnmatchedParen",
+  "Nothing to repeat": "reNothingToRepeat",
+  "Unterminated character class": "reUnterminatedClass",
+  "\\ at end of pattern": "reTrailingBackslash",
+  "Range out of order in character class": "reRangeOrder",
+  "Invalid group": "reInvalidGroup",
+  "numbers out of order in {} quantifier": "reQuantifierOrder",
+  "Invalid capture group name": "reGroupName",
+};
+
+/** Why a pattern is not a regular expression, in the page's language, with Chrome's own words after them. */
+function reason(error: string): string {
+  const key = RE_ERRORS[error];
+  const said = key ? t(key) : error;
+  return said === error ? error : `${said} (${error})`;
+}
+
+/** What the lines of sites say: each line that is not a regular expression; else that the syntax is right, the
+ * lines that match any site, and which line matches the address to try. `ok`: every line is a regular expression. */
+function checkSites(text: string): { ok: boolean; patterns: string[]; notes: { text: string; bad?: boolean }[] } {
+  const lines = readSites(text);
+  const bad = lines.filter((l) => l.error !== undefined);
+  if (bad.length) {
+    return { ok: false, patterns: [], notes: [...bad.map((l) => ({ text: t("optSitesBad", { n: l.line, error: reason(l.error ?? "") }), bad: true })), { text: t("optSitesNotSaved"), bad: true }] };
+  }
+  const notes: { text: string; bad?: boolean }[] = [{ text: lines.length ? t("optSitesOk", { n: lines.length }) : t("optSitesNone") }];
+  for (const l of lines) {
+    if (l.anySite) notes.push({ text: t("optSitesAny", { n: l.line }), bad: true });
+    if (l.looseDot) notes.push({ text: t("optSitesLooseDot", { n: l.line }), bad: true });
+  }
+  const site = originOf(tryAddress);
+  if (site && lines.length) {
+    const hit = lines.find((l) => allowedOn([l.pattern], site));
+    if (hit) notes.push({ text: t("optSitesMatch", { site, n: hit.line }) });
+    else {
+      notes.push({ text: t("optSitesNoMatch", { site }) });
+      // written without https://: it matches the host alone
+      const host = new URL(site).host;
+      const near = lines.find((l) => allowedOn([l.pattern], host));
+      if (near) notes.push({ text: t("optSitesNoScheme", { n: near.line, host, site }), bad: true });
+    }
+  }
+  return { ok: true, patterns: lines.map((l) => l.pattern), notes };
+}
+
+/** Under an "Auto" tool: its sites, one pattern per line, saved when the box is left if every line is right. */
+function sitesRow(tool: string): HTMLElement {
+  const box = h("textarea", { class: "sites", rows: "2", spellcheck: "false", "aria-label": t("optSitesOf", { tool }), placeholder: GEMINI_SITE, "data-key": `sites:${tool}` });
+  box.value = drafts.get(tool) ?? (own(settings.autoSites, tool) ?? []).join("\n");
+  const out = h("div", { class: "checks small", "aria-live": "polite" });
+  const show = () => out.replaceChildren(...(checks.get(tool) ?? []).map((n) => h("div", { class: n.bad ? "err" : "ok" }, n.text)));
+  const check = () => {
+    const got = checkSites(box.value);
+    checks.set(tool, got.notes);
+    show();
+    return got;
+  };
+  box.addEventListener("input", () => drafts.set(tool, box.value));
+  // on leaving the box, not on "change": a box drawn anew with what was typed has no change pending
+  box.addEventListener("blur", () => {
+    if (!drafts.has(tool)) return;
+    const got = check();
+    if (!got.ok) return;
+    void update((s) => void (s.autoSites[tool] = got.patterns)).then(() => {
+      drafts.delete(tool);
+      checks.set(tool, [...got.notes, { text: t("optSitesSaved") }]);
+      show();
+    });
+  });
+  const test = h("button", {}, t("optCheck"));
+  test.addEventListener("click", () => void check());
+  show();
+  return h("tr", { class: "sites-row" }, h("td", { colspan: "3" }, h("div", { class: "line" }, box, test), out));
 }
 
 /** The learned pages: each site with when it was learned, what of it was found, and Delete. */
@@ -203,6 +316,8 @@ async function main(): Promise<void> {
     if (area === "local" && changes[LAYOUTS_KEY]) void renderLayouts();
     if (area !== "local" || !changes.settings) return;
     void loadSettings().then((fresh) => {
+      // this page's own change: the table already shows it (a repaint would take the focus out of a box)
+      if (JSON.stringify(fresh) === JSON.stringify(settings)) return;
       settings = fresh;
       renderTools();
     });

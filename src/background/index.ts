@@ -5,6 +5,7 @@ import type { BridgeState, CallReply, PortRequest, Request, ServerConfig, Server
 import { loadSettings, updateSettings } from "../shared/config.ts";
 import { TEST_BUILD } from "../shared/dom.ts";
 import type { ToolInfo } from "../shared/protocol.ts";
+import { allowSite, own, policiesOn } from "../shared/sites.ts";
 import { exposeTools, noSuchTool } from "../shared/tools.ts";
 import { McpClient, McpError, resultToText } from "./mcp-client.ts";
 
@@ -20,6 +21,9 @@ interface Conn {
 
 const conns = new Map<string, Conn>();
 const LIST_MAX_AGE_MS = 30_000;
+/** A call names a tool that is not in the lists: they are fetched again only when one is older than this (a page
+ * that names made-up tools over and over must not make every server list its tools each time). */
+const RELIST_MIN_AGE_MS = 5_000;
 
 const identity = (c: ServerConfig) => JSON.stringify([c.url, c.token]);
 
@@ -68,17 +72,27 @@ async function list(c: Conn): Promise<void> {
 
 const live = () => [...conns.values()].filter((c) => c.status === "ok");
 
-function tools(settings: Settings) {
+/** The tools as they are on one site: there an "Auto" tool whose sites miss it is "ask". */
+function tools(settings: Settings, site: string) {
   return exposeTools(
     live().map((c) => ({ id: c.config.id, name: c.config.name, tools: c.tools })),
-    settings.policies,
+    policiesOn(settings, site),
   );
 }
 
-async function getState(refresh: boolean): Promise<BridgeState> {
+/** The site of the page that sent a message, as Chrome tells it (not as the page says): "" when there is none. */
+function siteOf(sender: chrome.runtime.MessageSender | undefined): string {
+  try {
+    return sender?.origin ?? (sender?.url ? new URL(sender.url).origin : "");
+  } catch {
+    return "";
+  }
+}
+
+async function getState(refresh: boolean, site: string): Promise<BridgeState> {
   const settings = await loadSettings();
   await sync(settings, refresh);
-  const { visible, hidden } = tools(settings);
+  const { visible, hidden } = tools(settings, site);
   const ok = live();
   const notes: string[] = [];
   for (const c of ok) {
@@ -102,25 +116,30 @@ async function getState(refresh: boolean): Promise<BridgeState> {
 }
 
 /**
- * Runs one call. The policy is checked here, from the settings as they are now, whatever the page believed:
- * an "ask" tool runs only with the user's approval of this call, an "off" or unknown tool never.
+ * Runs one call. The policy is checked here, from the settings as they are now and the site Chrome says the page
+ * is on, whatever the page believed: an "ask" tool (or an "Auto" one on another site) runs only with the user's
+ * approval of this call, an "off" or unknown tool never.
  */
-async function callTool(name: string, args: Record<string, unknown>, approved: boolean, signal: AbortSignal): Promise<CallReply> {
+async function callTool(name: string, args: Record<string, unknown>, approved: boolean, site: string, signal: AbortSignal): Promise<CallReply> {
   const started = Date.now();
   const reply = (ok: boolean, text: string, needsApproval = false): CallReply => ({ ok, text, durationMs: Date.now() - started, ...(needsApproval ? { needsApproval } : {}) });
   const settings = await loadSettings();
   if (!settings.enabled) return reply(false, "MCP Bridge is turned off in the browser.");
   await sync(settings, false);
-  let exposed = tools(settings);
+  let exposed = tools(settings, site);
   let tool = exposed.visible.find((t) => t.name === name);
-  if (!tool && !exposed.hidden.some((t) => t.name === name)) {
-    // perhaps a server came up or got the tool since the list was made
+  if (!tool && !exposed.hidden.some((t) => t.name === name) && live().some((c) => Date.now() - c.listedAt > RELIST_MIN_AGE_MS)) {
+    // perhaps a server got the tool since the list was made
     await sync(settings, true);
-    exposed = tools(settings);
+    exposed = tools(settings, site);
     tool = exposed.visible.find((t) => t.name === name);
   }
   if (!tool) return reply(false, noSuchTool(name, exposed.visible.map((t) => t.name)));
-  if (tool.policy !== "auto" && !approved) return reply(false, "This tool needs the user's approval.", true);
+  // the settings as they are now: they may have changed while the servers listed their tools (a site taken out,
+  // the tool set to Ask or Off)
+  const policy = own(policiesOn(await loadSettings(), site), name) ?? "ask";
+  if (policy === "off") return reply(false, noSuchTool(name, exposed.visible.filter((t) => t.name !== name).map((t) => t.name)));
+  if (policy !== "auto" && !approved) return reply(false, "This tool needs the user's approval.", true);
   const c = conns.get(tool.serverId);
   if (!c) return reply(false, `The server of ${name} is not connected.`);
   // the page may have gone while the lists were fetched
@@ -227,13 +246,16 @@ chrome.runtime.onMessage.addListener((msg: Request, sender, sendResponse) => {
     return false;
   }
   if (msg.type === "getState") {
-    getState(msg.refresh === true).then(sendResponse, (e: unknown) => sendResponse({ error: String(e) }));
+    getState(msg.refresh === true, siteOf(sender)).then(sendResponse, (e: unknown) => sendResponse({ error: String(e) }));
     return true;
   }
-  if (msg.type === "setPolicy") {
-    updateSettings((s) => {
-      s.policies[msg.tool] = msg.policy;
-    }).then(
+  if (msg.type === "allowHere") {
+    const site = siteOf(sender);
+    if (!/^https?:\/\//.test(site) || typeof msg.tool !== "string") {
+      sendResponse(false);
+      return false;
+    }
+    updateSettings((s) => allowSite(s, msg.tool, site)).then(
       () => sendResponse(true),
       () => sendResponse(false),
     );
@@ -258,7 +280,7 @@ chrome.runtime.onConnect.addListener((port) => {
         // the page went away
       }
     };
-    callTool(msg.tool, msg.arguments ?? {}, msg.approved === true, ctrl.signal).then(send, (e: unknown) => send({ ok: false, text: `The extension failed: ${String(e)}`, durationMs: 0 }));
+    callTool(msg.tool, msg.arguments ?? {}, msg.approved === true, siteOf(port.sender), ctrl.signal).then(send, (e: unknown) => send({ ok: false, text: `The extension failed: ${String(e)}`, durationMs: 0 }));
   });
 });
 

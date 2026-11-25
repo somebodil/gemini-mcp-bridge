@@ -513,7 +513,7 @@ export function startBridge(page: Page): () => void {
       }
       if (decision === "always") {
         known.policy = "auto";
-        void send({ type: "setPolicy", tool: known.name, policy: "auto" });
+        void send({ type: "allowHere", tool: known.name });
       }
       approved = true;
       return null;

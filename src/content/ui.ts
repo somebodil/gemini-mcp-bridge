@@ -86,8 +86,10 @@ export class Row {
   private readonly stateEl: HTMLSpanElement;
   private readonly body: HTMLDivElement;
   private readonly argsText: string;
+  private readonly tool: string;
 
   constructor(tool: string, args: unknown) {
+    this.tool = tool;
     this.argsText = args === undefined ? "" : argsShown(JSON.stringify(args, null, 2));
     this.stateEl = h("span", { class: "state" });
     this.body = h("div");
@@ -139,7 +141,7 @@ export class Row {
       };
       const onAbort = () => finish("deny");
       const run = h("button", { class: "primary", disabled: "" }, t("run"));
-      const always = h("button", { disabled: "" }, t("alwaysAllow"));
+      const always = h("button", { disabled: "", title: t("alwaysAllowTitle", { tool: this.tool, site: location.host }) }, t("alwaysAllow"));
       const deny = h("button", { disabled: "" }, t("deny"));
       onTrustedClick(run, () => finish("run"));
       onTrustedClick(always, () => finish("always"));

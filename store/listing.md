@@ -31,7 +31,7 @@ HOW IT WORKS
 • On other chat pages, the extension learns the page from one test message you send, and you can point out a part it got wrong.
 
 YOU STAY IN CONTROL
-• Every call waits for your Run, unless you allowed that tool to run by itself.
+• Every call waits for your Run, unless you allowed that tool to run by itself on that site.
 • Calls in old conversations never run: only replies written while you watch.
 • After 20 automatic rounds the extension pauses and asks.
 • The extension reaches only 127.0.0.1 and localhost.
@@ -62,7 +62,7 @@ Gemini MCP Bridge는 웹의 Gemini(gemini.google.com, Gemini Enterprise, 다른 
 • 다른 채팅 페이지에서는 내가 보내는 시험 메시지 하나로 페이지를 학습하고, 잘못 배운 부분은 직접 골라 줄 수 있습니다.
 
 내가 정합니다
-• 스스로 실행하게 허용한 도구가 아니면, 모든 호출은 실행을 누를 때까지 기다립니다.
+• 그 사이트에서 스스로 실행하게 허용한 도구가 아니면, 모든 호출은 실행을 누를 때까지 기다립니다.
 • 지난 대화의 호출은 실행하지 않습니다. 보는 동안 쓰인 답변만 다룹니다.
 • 자동으로 20번 주고받으면 멈추고 묻습니다.
 • 확장은 127.0.0.1과 localhost에만 연결합니다.

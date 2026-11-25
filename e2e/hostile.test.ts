@@ -10,16 +10,14 @@ import { join } from "node:path";
 import { after, before, beforeEach, describe, it } from "node:test";
 import type { ElementHandle, Page } from "playwright";
 import type { Layout } from "../src/content/layout.ts";
-import type { Settings } from "../src/shared/config.ts";
 import { MARK } from "../src/shared/protocol.ts";
-import { startHarness, type Harness } from "./harness.ts";
+import { auto, startHarness, type Harness } from "./harness.ts";
 import { box, button, closeResults, startLearning } from "./learning.ts";
 
 const MOCK = readFileSync(join(import.meta.dirname, "mock-hostile.html"), "utf8");
 const SITE = "https://hostile.example.test";
 /** A call as models often write it: pretty-printed over several lines. */
 const call = (tool: string, args: Record<string, unknown>) => `Let me check.\n\n\`\`\`json\n${JSON.stringify({ mcp_call: { tool, arguments: args } }, null, 2)}\n\`\`\``;
-const auto = (...tools: string[]): Partial<Settings> => ({ policies: Object.fromEntries(tools.map((t) => [t, "auto"])) });
 
 let h: Harness;
 

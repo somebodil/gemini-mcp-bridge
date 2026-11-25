@@ -12,6 +12,12 @@ import { startTestServer } from "./test-server.ts";
 export const EXTENSION = resolve(import.meta.dirname, "..", "dist", "extension-test");
 export const TOKEN = "e2e-token-0123456789abcdef";
 
+/** Settings where these tools run without asking, on every site. */
+export const auto = (...tools: string[]): Partial<Settings> => ({
+  policies: Object.fromEntries(tools.map((t) => [t, "auto"])),
+  autoSites: Object.fromEntries(tools.map((t) => [t, [".*"]])),
+});
+
 export interface Harness {
   context: BrowserContext;
   /** The extension's service worker as it is now (a reload of the extension starts a new one). */

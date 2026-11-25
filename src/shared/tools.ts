@@ -21,7 +21,7 @@ export function exposeTools(servers: ServerTools[], policies: Record<string, Pol
   for (const s of servers) {
     for (const t of s.tools) {
       const name = (count.get(t.name) ?? 0) > 1 ? `${s.name}__${t.name}` : t.name;
-      const tool: ExposedTool = { ...t, name, original: t.name, serverId: s.id, policy: policies[name] ?? "ask" };
+      const tool: ExposedTool = { ...t, name, original: t.name, serverId: s.id, policy: (Object.hasOwn(policies, name) ? policies[name] : undefined) ?? "ask" };
       (tool.policy === "off" ? hidden : visible).push(tool);
     }
   }

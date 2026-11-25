@@ -93,7 +93,7 @@ Open [Gemini](https://gemini.google.com/app) and click the extension's icon: **O
 
 - The button in the corner shows the state (*MCP · 4 tools*). Click it to see the servers, to turn the tools off for this chat, or to turn the extension off in this tab. Drag it elsewhere if it covers something; it keeps the place for the site.
 - The extension stays on in the tab when you reload the page. It goes off when you click the icon again, when the tab goes to another site, or when you close the tab. Other tabs are not touched.
-- Each call gets a card under it. Press **Run** to run it, **Always allow** to let that tool run without asking from now on, or **Deny**.
+- Each call gets a card under it. Press **Run** to run it, **Always allow here** to let that tool run without asking from now on on this site, or **Deny**.
 - While a message is on its way, a line above the corner button says where it is: the page is writing the reply, the reply has calls, waiting for your **Run**, running, sending the results, done. A smaller line says what went along with your message (the tool instructions, the results). When no reply is found, the line says so, and what you can do.
 
 ![A call waiting for Run](store/images/screenshot-1-ask.png)
@@ -157,7 +157,7 @@ Your settings stay. The server updates the same way it was installed: `npx` take
 Read this before you allow a tool to run by itself.
 
 - **Only where you turn it on.** The extension can see a page only after you click its icon in that tab (Chrome's *activeTab*). It has no access to any site by itself.
-- **Calls wait for you.** By default every call waits for your **Run**. *Always allow* (or *Auto* on the options page) lets one tool run without asking, on every page where you turn the extension on (not only the one where you pressed it); there is no switch that lets every tool run.
+- **Calls wait for you.** By default every call waits for your **Run**. *Always allow here* (or *Auto* on the options page) lets one tool run without asking, only on the sites listed for it (the site where you pressed it; Gemini when you chose *Auto* on the options page); on every other site the tool still waits for your **Run**. There is no switch that lets every tool run.
 - **Gemini's text is not trustworthy.** A web page, a document or an email that Gemini reads can carry instructions of its own ("prompt injection"). Keep tools that run commands or write files on **Ask** unless you watch closely.
 - **Old conversations never run calls.** A reply is handled only if this tab saw Gemini write it. Opening an old chat, reloading the page or switching chats runs nothing.
 - **Local only.** The extension may reach only `127.0.0.1` and `localhost`.
@@ -168,6 +168,8 @@ Read this before you allow a tool to run by itself.
 
 - **MCP servers:** any number of them, each with a URL and an optional token (sent as `Authorization: Bearer`). If two servers have a tool of the same name, the server's name goes in front of it.
 - **Tools:** *Ask*, *Auto* or *Off* for each tool. Gemini is not told about tools that are off.
+    - Under an *Auto* tool, the sites where it runs without asking, one regular expression per line. A pattern has to match the whole address of the site (scheme, host and port, no path), case aside: `https://gemini\.google\.com`, `https://(chat|www)\.example\.com`, `http://127\.0\.0\.1:\d+`. `gemini\.google\.com` alone matches nothing (no `https://`), and `.*` matches every site.
+    - **Check** says which lines are not regular expressions and why, which lines match any site, which have a plain `.` (it matches any character, so `https://gemini.google.com` matches `https://gemini-google.com` too: write `\.`), and which line matches the address in *Address to try the patterns on*. The list is saved when you leave the box, and only when every line is a regular expression. With no line, the tool is asked about everywhere. Setting the tool to *Ask* or *Off* forgets its sites.
 - **Behavior:**
     - Send the results by itself, or leave them in the input box.
     - How many automatic rounds before a pause.

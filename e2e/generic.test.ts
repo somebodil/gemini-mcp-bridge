@@ -11,11 +11,10 @@ import { after, before, beforeEach, describe, it } from "node:test";
 import type { Page } from "playwright";
 import type { Settings } from "../src/shared/config.ts";
 import { MARK } from "../src/shared/protocol.ts";
-import { startHarness, type Harness } from "./harness.ts";
+import { auto, startHarness, type Harness } from "./harness.ts";
 
 const MOCK = readFileSync(join(import.meta.dirname, "mock-chat.html"), "utf8");
 const call = (tool: string, args: Record<string, unknown>) => `Let me check.\n\`\`\`json\n${JSON.stringify({ mcp_call: { tool, arguments: args } })}\n\`\`\``;
-const auto = (...tools: string[]): Partial<Settings> => ({ policies: Object.fromEntries(tools.map((t) => [t, "auto"])) });
 
 let h: Harness;
 
@@ -125,6 +124,20 @@ describe("generic mode", () => {
       assert.equal((await sent(m.page)).length, 2);
       assert.deepEqual(h.calls, ["list_directory"]);
     }));
+
+  it("an Auto tool of another site waits for Run here; Always allow here adds this site, and the next call runs", async () => {
+    // Auto as stored before sites: Gemini's
+    await h.setSettings({ policies: { list_directory: "auto" } });
+    await withChat([call("list_directory", { path: h.dir }), call("list_directory", { path: h.dir }), "There is a-file.txt."], async (m) => {
+      await say(m.page, "What is in my folder?");
+      await cardButton(m.page, "Always allow here");
+      await waitSent(m.page, 3);
+      await waitLog(m, /answer without calls/);
+      assert.deepEqual(h.calls, ["list_directory", "list_directory"]);
+      const s = await h.worker.evaluate(async () => (await chrome.storage.local.get("settings")).settings as Settings);
+      assert.deepEqual(s.autoSites.list_directory, ["https://gemini\\.google\\.com", "https://chat\\.example\\.test"]);
+    });
+  });
 
   it("sends with the page's send button too", () =>
     withChat(["Hello."], async ({ page }) => {

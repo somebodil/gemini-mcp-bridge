@@ -1,6 +1,7 @@
 // Settings kept in chrome.storage.local, and the messages between the page and the service worker.
 
 import type { ToolInfo } from "./protocol.ts";
+import { GEMINI_SITE } from "./sites.ts";
 
 export type Policy = "ask" | "auto" | "off";
 
@@ -28,6 +29,8 @@ export interface Settings extends Behavior {
   servers: ServerConfig[];
   /** Per exposed tool name. A tool without an entry is asked about. */
   policies: Record<string, Policy>;
+  /** Per "Auto" tool: the sites where it runs without asking (regular expressions of whole site addresses, sites.ts). */
+  autoSites: Record<string, string[]>;
   callTimeoutSec: number;
 }
 
@@ -37,6 +40,7 @@ export const DEFAULT_SETTINGS: Settings = {
   enabled: true,
   servers: [{ id: "local", name: "local", url: DEFAULT_URL, token: "", enabled: true }],
   policies: {},
+  autoSites: {},
   autoSend: true,
   maxRounds: 20,
   maxResultChars: 20000,
@@ -50,16 +54,13 @@ export async function loadSettings(): Promise<Settings> {
   return normalizeSettings(got);
 }
 
-export async function saveSettings(s: Settings): Promise<void> {
-  await chrome.storage.local.set({ [KEY]: normalizeSettings(s) });
-}
-
 /** Applies one change to the settings as they are stored now (others may have changed them meanwhile). */
 export async function updateSettings(change: (s: Settings) => void): Promise<Settings> {
   const fresh = await loadSettings();
   change(fresh);
-  await saveSettings(fresh);
-  return normalizeSettings(fresh);
+  const s = normalizeSettings(fresh);
+  await chrome.storage.local.set({ [KEY]: s });
+  return s;
 }
 
 const POLICIES = new Set<unknown>(["ask", "auto", "off"]);
@@ -69,6 +70,15 @@ export function normalizeSettings(got: Partial<Settings> | undefined): Settings 
   const num = (v: unknown, d: number, min: number, max: number) => (typeof v === "number" && Number.isFinite(v) ? Math.min(max, Math.max(min, Math.round(v))) : d);
   const policies: Record<string, Policy> = {};
   if (typeof s.policies === "object" && s.policies) for (const [k, v] of Object.entries(s.policies)) if (POLICIES.has(v)) policies[k] = v;
+  // only "Auto" tools have sites: one set to Ask or Off forgets them. An "Auto" without a list (stored before there
+  // were sites, or just chosen on the options page) is Gemini's; an emptied list stays empty
+  const autoSites: Record<string, string[]> = {};
+  const lists = typeof s.autoSites === "object" && s.autoSites ? (s.autoSites as Record<string, unknown>) : {};
+  for (const [k, p] of Object.entries(policies)) {
+    if (p !== "auto" || k === "__proto__") continue;
+    const v = Object.hasOwn(lists, k) ? lists[k] : undefined;
+    autoSites[k] = Array.isArray(v) ? [...new Set(v.filter((x): x is string => typeof x === "string").map((x) => x.trim()).filter(Boolean))] : [GEMINI_SITE];
+  }
   return {
     enabled: s.enabled !== false,
     servers: Array.isArray(s.servers)
@@ -83,6 +93,7 @@ export function normalizeSettings(got: Partial<Settings> | undefined): Settings 
           }))
       : DEFAULT_SETTINGS.servers,
     policies,
+    autoSites,
     autoSend: s.autoSend !== false,
     maxRounds: num(s.maxRounds, DEFAULT_SETTINGS.maxRounds, 1, 200),
     maxResultChars: num(s.maxResultChars, DEFAULT_SETTINGS.maxResultChars, 1000, 200000),
@@ -133,7 +144,8 @@ export interface BridgeState {
 
 export type Request =
   | { type: "getState"; refresh?: boolean }
-  | { type: "setPolicy"; tool: string; policy: Policy }
+  /** "Always allow" on a card: the tool runs without asking on the site of the page that sent this, from now on. */
+  | { type: "allowHere"; tool: string }
   | { type: "openOptions" }
   /** From the page script: turn the bridge off in its own tab. */
   | { type: "turnOff" };
