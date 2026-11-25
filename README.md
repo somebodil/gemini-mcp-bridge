@@ -31,7 +31,14 @@ Gemini does not know an extension exists. It follows the instructions in the con
    npx gemini-mcp-bridge-server
    ```
 
-2. **Add the extension to Chrome:** from the Chrome Web Store, or from a release zip ([Releases](../../releases)). For a zip: unzip it, open `chrome://extensions`, turn on **Developer mode**, click **Load unpacked**, and choose the folder.
+   To have it start whenever you log in: `npm install -g gemini-mcp-bridge-server`, then `gemini-mcp-bridge-server install-service` ([details](https://github.com/somebodil/gemini-mcp-bridge-server#start-it-when-you-log-in)).
+
+2. **Add the extension to Chrome** (it is not in the Chrome Web Store):
+    1. Download `gemini-mcp-bridge-extension-<version>.zip` from the latest [release](../../releases/latest) and unzip it into a folder you keep.
+    2. Open `chrome://extensions` and turn on **Developer mode** (top right).
+    3. Click **Load unpacked** and choose the folder.
+
+   A new version does not install itself: download the new zip, unzip it over the same folder, and press the reload button of the extension in `chrome://extensions`. Your settings stay.
 3. **Connect them:** the options page opens after the install (later: the extension's icon > **Settings**). Enter the URL and the token, then press **Test**. It should say *Connected · 4 tools*.
 4. **Use it:** open Gemini and ask something that needs your computer, for example *"What are the largest files in my Downloads folder?"*. A small button in the lower right corner of Gemini's page shows the state, and turns the tools off for one chat.
 
@@ -80,6 +87,8 @@ npm run e2e:live  # against the real gemini.google.com, signed out
 With `localStorage["gmb-debug"] = "1"` on gemini.google.com, the extension writes its steps to the console.
 
 A release: set the same version in `package.json`, `static/manifest.json` and `src/background/mcp-client.ts`, then push a tag with that version. The workflow builds the zip, attests it, and creates the release.
+
+`store/` holds what a Chrome Web Store listing would need (texts, screenshots, the promo tile), for the day the extension goes there.
 
 ## License
 

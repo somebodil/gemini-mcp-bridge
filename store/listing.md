@@ -1,6 +1,6 @@
 # Chrome Web Store listing
 
-What to enter in the Chrome Web Store developer dashboard. Images: `store/images/` (made by `node store/shots.ts`, see the end).
+The extension is not in the Chrome Web Store yet; it is installed from the release zip. This is what to enter in the developer dashboard when it goes there. Images: `store/images/` (made by `node store/shots.ts`, see the end).
 
 ## Store listing
 
