@@ -18,7 +18,7 @@ Nothing else leaves your browser. The extension has no analytics and no remote c
 
 ## The local server
 
-The matching local server ([gemini-mcp-bridge-server](https://github.com/somebodil/gemini-mcp-bridge-server)) is a separate program. It runs on your computer, listens on `127.0.0.1` only, and keeps its settings in a file on your computer. It sends nothing anywhere, except what the MCP servers you configure do on their own.
+The matching local server ([gemini-mcp-bridge-server](https://github.com/somebodil/gemini-mcp-bridge-server)) is a separate program. It runs on your computer, takes only requests that carry its token, and keeps its settings in a file on your computer. It sends nothing anywhere, except what the MCP servers you configure do on their own.
 
 ## Contact
 
