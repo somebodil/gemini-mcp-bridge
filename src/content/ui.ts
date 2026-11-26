@@ -216,7 +216,7 @@ export class Card {
 // Status button and its panel
 
 export interface Notice {
-  kind: "paused" | "results" | "inBox" | "sendFailed";
+  kind: "results" | "inBox" | "sendFailed";
   text: string;
   action?: { label: string; run: () => void };
 }

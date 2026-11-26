@@ -47,6 +47,7 @@ import {
   type Page,
   type Progress,
 } from "./page.ts";
+import { timed } from "./perf.ts";
 import { Card } from "./ui.ts";
 
 /** A reply's blocks unchanged this long (and the page not writing): the reply is finished. */
@@ -237,10 +238,10 @@ export class GenericPage implements Page {
     window.addEventListener("focusin", this.onFocus, true);
   }
 
-  private readonly onFocus = (e: FocusEvent) => {
+  private readonly onFocus = timed("focusin", (e: FocusEvent) => {
     const ed = editableOf(deepTarget(e));
     if (ed && this.mayBeTheBox(ed)) this.ed = ed;
-  };
+  });
 
   /**
    * The chat's input box can be `ed`: the learned one (or in it) where the page has it; else not a search field,

@@ -151,6 +151,7 @@ Your settings stay. The server updates the same way it was installed: `npx` take
 | Gemini says it cannot access your computer | Start a new chat: the instructions go with the first message of a chat. Check that the corner button is there and shows tools, and not *Off*. |
 | Gemini writes a call, but nothing happens | Look at the card under it: it may be waiting for **Run**. A call in a chat opened from the history never runs: only replies written while the page is open do. |
 | The extension disappeared after Chrome restarted | Its folder was moved or deleted: unzip it again and **Load unpacked** again. |
+| The page is slow with the extension on | Turn on the **Performance log** in the options, use the page as usual for a few minutes, and copy the lines into an issue. They say how long the slow clicks, keys and frames took and how much of each was the extension's own work. |
 
 ## Safety
 
@@ -162,7 +163,6 @@ Read this before you allow a tool to run by itself.
 - **Old conversations never run calls.** A reply is handled only if this tab saw Gemini write it. Opening an old chat, reloading the page or switching chats runs nothing.
 - **Local only.** The extension may reach only `127.0.0.1` and `localhost`.
 - **What Google sees.** The instructions, the tool list and every tool result become messages of your Gemini conversation. Google stores and uses them like everything else you type into Gemini. Do not let Gemini read files you would not paste into Gemini yourself.
-- **A loop guard.** After 20 automatic rounds without a message from you, the extension pauses and asks before it continues (the number is in the options).
 
 ## Options
 
@@ -172,10 +172,14 @@ Read this before you allow a tool to run by itself.
     - **Check** says which lines are not regular expressions and why, which lines match any site, which have a plain `.` (it matches any character, so `https://gemini.google.com` matches `https://gemini-google.com` too: write `\.`), and which line matches the address in *Address to try the patterns on*. The list is saved when you leave the box, and only when every line is a regular expression. With no line, the tool is asked about everywhere. Setting the tool to *Ask* or *Off* forgets its sites.
 - **Behavior:**
     - Send the results by itself, or leave them in the input box.
-    - How many automatic rounds before a pause.
     - How many characters of output go into one message (20,000 by default).
     - The time limit of a call.
 - **Learned pages:** the chat pages learned in generic mode, each with when it was learned and which parts were found or picked by hand. Delete one to go back to guessing on it.
+- **Performance log** (off by default): to find out why a page is slow. In the tabs where the extension is on, it writes down
+    - each click or key that took 100 ms or more to show its effect (what Chrome's *Interaction to Next Paint* measures), each frame of 150 ms or more, and how much of that time was the extension's own work;
+    - every minute, how much time the extension took and in which of its functions.
+
+  The lines carry names and numbers only (the site without its path, the tag and classes of the element clicked, the hosts and file names of the page's slow scripts), no text of the page. The last ones stay on the options page, with **Copy** and **Clear**, until the browser closes. When gemini-mcp-bridge-server is connected, it appends them to its `perf.log` too (`gemini-mcp-bridge-server perf-log` shows them).
 
 ## Limits
 

@@ -9,12 +9,13 @@ describe("normalizeSettings", () => {
   });
 
   it("keeps numbers within their bounds and rounds them", () => {
-    const s = normalizeSettings({ maxRounds: 0, maxResultChars: 10, callTimeoutSec: 99999.6 });
-    assert.equal(s.maxRounds, 1);
+    const s = normalizeSettings({ maxResultChars: 10, callTimeoutSec: 99999.6 });
     assert.equal(s.maxResultChars, 1000);
     assert.equal(s.callTimeoutSec, 3600);
-    assert.equal(normalizeSettings({ maxRounds: Number.NaN }).maxRounds, DEFAULT_SETTINGS.maxRounds);
-    assert.equal(normalizeSettings({ maxRounds: 7.4 }).maxRounds, 7);
+    assert.equal(normalizeSettings({ callTimeoutSec: Number.NaN }).callTimeoutSec, DEFAULT_SETTINGS.callTimeoutSec);
+    assert.equal(normalizeSettings({ callTimeoutSec: 7.4 }).callTimeoutSec, 7);
+    // a limit of rounds that older versions kept is dropped
+    assert.equal("maxRounds" in normalizeSettings({ maxRounds: 2 } as Partial<typeof DEFAULT_SETTINGS>), false);
   });
 
   it("cleans up servers: trims, names, ids, drops entries without a URL", () => {

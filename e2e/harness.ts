@@ -26,15 +26,17 @@ export interface Harness {
   dir: string;
   /** Tools the test server ran, in order. */
   calls: string[];
+  /** Lines of the performance log the test server got. */
+  perf: string[];
   setSettings(s: Partial<Settings>): Promise<void>;
   /** Turns the bridge on in the page's tab, or off where it is on, as a click on the extension's icon does. */
   toggle(page: Page): Promise<boolean>;
   close(): Promise<void>;
 }
 
-export async function startHarness(opts: { headless?: boolean; locale?: string } = {}): Promise<Harness> {
+export async function startHarness(opts: { headless?: boolean; locale?: string; serverName?: string } = {}): Promise<Harness> {
   const dir = mkdtempSync(join(tmpdir(), "gmb-e2e-"));
-  const server = await startTestServer({ token: TOKEN });
+  const server = await startTestServer({ token: TOKEN, name: opts.serverName });
   const url = server.url;
   const profile = mkdtempSync(join(tmpdir(), "gmb-profile-"));
   const context = await chromium.launchPersistentContext(profile, {
@@ -64,6 +66,7 @@ export async function startHarness(opts: { headless?: boolean; locale?: string }
     url,
     dir,
     calls: server.calls,
+    perf: server.perf,
     setSettings,
     toggle: (page) =>
       current().evaluate(async (url) => {

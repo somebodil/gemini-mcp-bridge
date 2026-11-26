@@ -18,8 +18,6 @@ export interface ServerConfig {
 export interface Behavior {
   /** Send the results to Gemini by itself; off: the results wait in the input box for the user to send. */
   autoSend: boolean;
-  /** Results sent by the extension in a row, without a message of the user, before it pauses. */
-  maxRounds: number;
   /** Characters of tool output per results message. */
   maxResultChars: number;
 }
@@ -32,6 +30,8 @@ export interface Settings extends Behavior {
   /** Per "Auto" tool: the sites where it runs without asking (regular expressions of whole site addresses, sites.ts). */
   autoSites: Record<string, string[]>;
   callTimeoutSec: number;
+  /** The performance log (content/perf.ts): off unless the user turns it on. */
+  perfLog: boolean;
 }
 
 export const DEFAULT_URL = "http://127.0.0.1:7341/mcp";
@@ -42,9 +42,9 @@ export const DEFAULT_SETTINGS: Settings = {
   policies: {},
   autoSites: {},
   autoSend: true,
-  maxRounds: 20,
   maxResultChars: 20000,
   callTimeoutSec: 300,
+  perfLog: false,
 };
 
 const KEY = "settings";
@@ -95,9 +95,9 @@ export function normalizeSettings(got: Partial<Settings> | undefined): Settings 
     policies,
     autoSites,
     autoSend: s.autoSend !== false,
-    maxRounds: num(s.maxRounds, DEFAULT_SETTINGS.maxRounds, 1, 200),
     maxResultChars: num(s.maxResultChars, DEFAULT_SETTINGS.maxResultChars, 1000, 200000),
     callTimeoutSec: num(s.callTimeoutSec, DEFAULT_SETTINGS.callTimeoutSec, 5, 3600),
+    perfLog: s.perfLog === true,
   };
 }
 
@@ -140,6 +140,7 @@ export interface BridgeState {
   hiddenTools: ExposedTool[];
   notes: string[];
   behavior: Behavior;
+  perfLog: boolean;
 }
 
 export type Request =
@@ -148,7 +149,16 @@ export type Request =
   | { type: "allowHere"; tool: string }
   | { type: "openOptions" }
   /** From the page script: turn the bridge off in its own tab. */
-  | { type: "turnOff" };
+  | { type: "turnOff" }
+  /** From the page script: lines of the performance log. */
+  | { type: "perf"; lines: string[] }
+  /** From the options page: forget the lines of the performance log. */
+  | { type: "perfClear" };
+
+/** The performance log in chrome.storage.session: its last lines, and whether the server took them. */
+export const PERF_LINES_KEY = "perfLines";
+export const PERF_SERVER_KEY = "perfServer";
+export type PerfServer = { ok: true; file: string } | { ok: false; why: "none" | "old" | "error"; error?: string };
 
 /** `approved`: the user pressed Run for this very call. The service worker runs an "ask" tool only then. */
 export type PortRequest = { type: "call"; tool: string; arguments: Record<string, unknown>; approved: boolean } | { type: "ping" };

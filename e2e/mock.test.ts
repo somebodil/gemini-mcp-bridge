@@ -470,18 +470,14 @@ describe("only the answer to a message this tab sent", () => {
     }));
 });
 
-describe("loop guard and sends", () => {
-  it("pauses before running the calls of a reply past the limit", async () => {
-    await h.setSettings({ ...auto("list_directory"), maxRounds: 2 });
+describe("rounds and sends", () => {
+  it("goes on round after round without pausing", async () => {
+    await h.setSettings(auto("list_directory"));
     const loop = call("list_directory", { path: h.dir });
-    await withMock([loop, loop, loop, loop], async ({ page }) => {
+    await withMock([loop, loop, loop, loop, "Done."], async ({ page }) => {
       await say(page, "loop");
-      await page.waitForFunction(() => document.querySelector("gmb-status")?.shadowRoot?.textContent?.includes("Paused after 2"), null, { timeout: 20_000 });
-      assert.equal((await sent(page)).length, 3, "the user's message and two results");
-      assert.equal(h.calls.length, 2, "the third reply's call waits");
-      await page.locator("gmb-status").getByRole("button", { name: "Continue" }).click();
-      await waitSent(page, 4);
-      assert.equal(h.calls.length, 3);
+      await page.waitForFunction(() => (window as unknown as MockWindow).__sent.length >= 5, null, { timeout: 60_000 });
+      assert.equal(h.calls.length, 4, "every reply's call ran, without a Continue");
     });
   });
 
@@ -512,15 +508,15 @@ describe("options page", () => {
       await url.press("Tab");
       await page.getByText("Only 127.0.0.1 and localhost addresses can be reached.").waitFor();
       await page.getByRole("combobox", { name: "read_file" }).selectOption("auto");
-      const rounds = page.locator("label", { hasText: "Pause after this many automatic rounds" }).locator("input");
-      await rounds.fill("999");
-      await rounds.press("Tab");
-      await page.waitForFunction(() => (document.querySelectorAll("input[type=number]")[0] as HTMLInputElement).value === "200");
+      const chars = page.locator("label", { hasText: "Characters of tool output per message" }).locator("input");
+      await chars.fill("999999");
+      await chars.press("Tab");
+      await page.waitForFunction(() => (document.querySelectorAll("input[type=number]")[0] as HTMLInputElement).value === "200000");
       const saved = await h.worker.evaluate(async () => (await chrome.storage.local.get("settings")).settings as Settings);
       assert.equal(saved.servers.length, 2);
       assert.equal(saved.servers[1].url, "http://127.0.0.1:7341/mcp", "the remote URL was not saved");
       assert.equal(saved.policies.read_file, "auto");
-      assert.equal(saved.maxRounds, 200);
+      assert.equal(saved.maxResultChars, 200000);
     } finally {
       await page.close();
     }

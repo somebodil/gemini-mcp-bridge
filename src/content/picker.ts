@@ -7,6 +7,7 @@ import { SHADOW_MODE } from "../shared/dom.ts";
 import type { Role } from "./layout.ts";
 import { ROLE_COLOR, roleName } from "./overlay.ts";
 import { deepElements, elementAtByBox, isOurs, parentOf, shadowOf, short } from "./page.ts";
+import { timed } from "./perf.ts";
 
 const SHEET = new CSSStyleSheet();
 SHEET.replaceSync(`
@@ -91,13 +92,13 @@ export class Picker {
     if (e.type === "click" && e instanceof MouseEvent) this.onClick(e);
   };
 
-  private readonly onMove = (e: PointerEvent) => {
+  private readonly onMove = timed("picker.move", (e: PointerEvent) => {
     const el = deepElementAt(e.clientX, e.clientY);
     if (el === this.hovered) return;
     this.hovered = el;
     this.inner = [];
     this.select(el);
-  };
+  });
 
   private onClick(e: MouseEvent): void {
     if (!e.isTrusted) return;
@@ -111,9 +112,11 @@ export class Picker {
     scrollerOf(this.hovered)?.scrollBy({ top: e.deltaY, left: e.deltaX });
   };
 
+  private readonly drawFrame = timed("picker.draw", () => this.draw());
+
   private readonly onScroll = () => {
     cancelAnimationFrame(this.frame);
-    this.frame = requestAnimationFrame(() => this.draw());
+    this.frame = requestAnimationFrame(this.drawFrame);
   };
 
   private readonly onKey = (e: KeyboardEvent) => {

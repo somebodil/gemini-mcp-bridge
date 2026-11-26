@@ -1,8 +1,8 @@
 // The service worker: keeps the connections to the MCP servers, runs the calls the page asks for, and turns the
 // bridge on and off per tab. The page script cannot reach 127.0.0.1 itself: the page's own rules apply to it.
 
-import type { BridgeState, CallReply, PortRequest, Request, ServerConfig, ServerState, Settings } from "../shared/config.ts";
-import { loadSettings, updateSettings } from "../shared/config.ts";
+import type { BridgeState, CallReply, PerfServer, PortRequest, Request, ServerConfig, ServerState, Settings } from "../shared/config.ts";
+import { loadSettings, PERF_LINES_KEY, PERF_SERVER_KEY, updateSettings } from "../shared/config.ts";
 import { TEST_BUILD } from "../shared/dom.ts";
 import type { ToolInfo } from "../shared/protocol.ts";
 import { allowSite, own, policiesOn } from "../shared/sites.ts";
@@ -17,6 +17,8 @@ interface Conn {
   error?: string;
   listedAt: number;
   pending?: Promise<void>;
+  /** When the server answered 404 to the performance log (a version from before it): tried again a minute later. */
+  perfMissingAt?: number;
 }
 
 const conns = new Map<string, Conn>();
@@ -111,8 +113,8 @@ async function getState(refresh: boolean, site: string): Promise<BridgeState> {
       serverName: c?.client.info?.serverInfo?.name,
     };
   });
-  const { autoSend, maxRounds, maxResultChars } = settings;
-  return { enabled: settings.enabled, servers, tools: visible, hiddenTools: hidden, notes, behavior: { autoSend, maxRounds, maxResultChars } };
+  const { autoSend, maxResultChars } = settings;
+  return { enabled: settings.enabled, servers, tools: visible, hiddenTools: hidden, notes, behavior: { autoSend, maxResultChars }, perfLog: settings.perfLog };
 }
 
 /**
@@ -150,6 +152,103 @@ async function callTool(name: string, args: Record<string, unknown>, approved: b
   } catch (e) {
     if (e instanceof McpError && (e.kind === "network" || e.kind === "http")) c.status = "error";
     return reply(false, e instanceof Error ? e.message : String(e));
+  }
+}
+
+// ---------------------------------------------------------------------------------------------------------
+// The performance log (content/perf.ts): its last lines stay in chrome.storage.session for the options page, and
+// gemini-mcp-bridge-server gets them for its perf.log. Other MCP servers get nothing of it.
+
+const BRIDGE_SERVER = "gemini-mcp-bridge-server";
+const PERF_MAX_CHARS = 100_000;
+const PERF_MAX_LINES = 50;
+const PERF_MAX_LINE = 2000;
+const PERF_RETRY_MS = 60_000;
+/** Lines that wait for the server at most; older ones are kept in the browser only. */
+const PERF_MAX_WAITING = 500;
+/** One batch after the other: two tabs must not overwrite each other's lines. */
+let perfQueue: Promise<void> = Promise.resolve();
+/** Lines for the server, and whether a post is under way (a server that does not answer must not hold the
+ * lines of the options page, or pile up posts). */
+let perfWaiting: string[] = [];
+let perfPosting = false;
+
+function takePerf(lines: unknown): void {
+  if (!Array.isArray(lines)) return;
+  const clean = lines
+    .filter((l): l is string => typeof l === "string")
+    .slice(0, PERF_MAX_LINES)
+    .map((l) => l.replace(/[\r\n]+/g, " ").slice(0, PERF_MAX_LINE));
+  if (!clean.length) return;
+  perfQueue = perfQueue.then(() => keepPerf(clean)).catch((e: unknown) => console.warn("MCP Bridge could not keep the performance log:", e));
+}
+
+async function keepPerf(lines: string[]): Promise<void> {
+  const settings = await loadSettings();
+  if (!settings.perfLog) return;
+  const all = [...(((await chrome.storage.session.get(PERF_LINES_KEY))[PERF_LINES_KEY] as string[] | undefined) ?? []), ...lines];
+  let chars = all.reduce((n, l) => n + l.length + 1, 0);
+  let drop = 0;
+  while (chars > PERF_MAX_CHARS) chars -= all[drop++].length + 1;
+  await chrome.storage.session.set({ [PERF_LINES_KEY]: all.slice(drop) });
+  perfWaiting.push(...lines);
+  if (perfWaiting.length > PERF_MAX_WAITING) perfWaiting = perfWaiting.slice(-PERF_MAX_WAITING);
+  if (!perfPosting) void postWaiting(settings);
+}
+
+/** Posts what waits, and what came meanwhile; lines the server did not take stay in the browser only. */
+async function postWaiting(settings: Settings): Promise<void> {
+  perfPosting = true;
+  try {
+    while (perfWaiting.length) {
+      const lines = perfWaiting;
+      perfWaiting = [];
+      const server = await sendPerf(settings, lines);
+      await chrome.storage.session.set({ [PERF_SERVER_KEY]: server });
+      if (!server.ok) break;
+    }
+  } catch (e) {
+    console.warn("MCP Bridge could not pass on the performance log:", e);
+  } finally {
+    perfPosting = false;
+  }
+}
+
+/** The options page's Clear: in the queue, so that a batch being kept does not bring the old lines back. */
+function clearPerf(): Promise<void> {
+  perfQueue = perfQueue.then(() => chrome.storage.session.remove(PERF_LINES_KEY)).catch(() => undefined);
+  return perfQueue;
+}
+
+async function sendPerf(settings: Settings, lines: string[]): Promise<PerfServer> {
+  // a service worker that started anew has no connection yet: it connects (and does not list the tools again
+  // for each batch after that)
+  if (!conns.size) await sync(settings, false);
+  let status: PerfServer = { ok: false, why: "none" };
+  for (const c of live()) {
+    if (c.client.info?.serverInfo?.name !== BRIDGE_SERVER) continue;
+    const got = await postPerf(c, lines);
+    if (!status.ok) status = got;
+  }
+  return status;
+}
+
+async function postPerf(c: Conn, lines: string[]): Promise<PerfServer> {
+  if (c.perfMissingAt && Date.now() - c.perfMissingAt < PERF_RETRY_MS) return { ok: false, why: "old" };
+  try {
+    const res = await fetch(new URL("perf", c.config.url), {
+      method: "POST",
+      headers: { ...(c.config.token ? { authorization: `Bearer ${c.config.token}` } : {}), "content-type": "text/plain; charset=utf-8" },
+      body: `${lines.join("\n")}\n`,
+      signal: AbortSignal.timeout(5000),
+    });
+    if (res.ok) return { ok: true, file: (await res.text()).trim().slice(0, 500) };
+    await res.body?.cancel();
+    if (res.status !== 404) return { ok: false, why: "error", error: `HTTP ${res.status}` };
+    c.perfMissingAt = Date.now();
+    return { ok: false, why: "old" };
+  } catch (e) {
+    return { ok: false, why: "error", error: e instanceof Error ? e.message : String(e) };
   }
 }
 
@@ -259,6 +358,17 @@ chrome.runtime.onMessage.addListener((msg: Request, sender, sendResponse) => {
       () => sendResponse(true),
       () => sendResponse(false),
     );
+    return true;
+  }
+  // the extension's own pages (the options page, also when it is open in a tab) and the page scripts
+  const ownPage = sender.url?.startsWith(chrome.runtime.getURL("")) === true;
+  if (msg.type === "perf") {
+    if (sender.tab && !ownPage) takePerf(msg.lines);
+    return false;
+  }
+  if (msg.type === "perfClear") {
+    if (!ownPage) return false;
+    void clearPerf().then(() => sendResponse(true));
     return true;
   }
   if (msg.type === "openOptions") void chrome.runtime.openOptionsPage();

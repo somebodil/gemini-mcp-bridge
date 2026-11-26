@@ -2,7 +2,20 @@
 // at once, into the settings as they are stored then: "Always allow" on Gemini's page may have changed others
 // meanwhile.
 
-import { DEFAULT_URL, isLocalUrl, loadSettings, updateSettings, type BridgeState, type Policy, type Request, type ServerConfig, type Settings } from "../shared/config.ts";
+import {
+  DEFAULT_URL,
+  isLocalUrl,
+  loadSettings,
+  PERF_LINES_KEY,
+  PERF_SERVER_KEY,
+  updateSettings,
+  type BridgeState,
+  type PerfServer,
+  type Policy,
+  type Request,
+  type ServerConfig,
+  type Settings,
+} from "../shared/config.ts";
 import { h } from "../shared/dom.ts";
 import { t, type Key } from "../shared/i18n.ts";
 import { LAYOUTS_KEY, loadLayouts, ROLES, storeLayout, type Role } from "../shared/layouts.ts";
@@ -51,7 +64,7 @@ function checkbox(checked: boolean, onChange: (v: boolean) => void): HTMLInputEl
 }
 
 /** One behavior setting: a switch or a number, saved on change; a number shows the value it was saved as. */
-function settingRow(key: "autoSend" | "maxRounds" | "maxResultChars" | "callTimeoutSec", label: string): HTMLElement {
+function settingRow(key: "autoSend" | "maxResultChars" | "callTimeoutSec", label: string): HTMLElement {
   if (key === "autoSend") {
     return h(
       "label",
@@ -269,6 +282,57 @@ async function renderLayouts(): Promise<void> {
   box.replaceChildren(h("table", {}, h("tbody", {}, ...rows)));
 }
 
+/** The performance log: its switch, the last lines with Copy and Clear, and whether the server writes them too. */
+function perfSection(): HTMLElement[] {
+  const lines = h("textarea", { class: "perf", rows: "10", readonly: "", spellcheck: "false", wrap: "off", "aria-label": t("optPerf"), placeholder: t("optPerfEmpty") });
+  const server = h("div", { class: "small", "aria-live": "polite" });
+  const copy = h("button", {}, t("optPerfCopy"));
+  copy.addEventListener("click", () => {
+    void navigator.clipboard.writeText(lines.value).then(
+      () => (copy.textContent = `✓ ${t("copied")}`),
+      () => (copy.textContent = t("copyFailed")),
+    );
+    setTimeout(() => (copy.textContent = t("optPerfCopy")), 2000);
+  });
+  const clear = h("button", {}, t("optPerfClear"));
+  clear.addEventListener("click", () => void chrome.runtime.sendMessage<Request>({ type: "perfClear" }));
+  perfPaint = async () => {
+    const got = await chrome.storage.session.get([PERF_LINES_KEY, PERF_SERVER_KEY]);
+    const all = (got[PERF_LINES_KEY] as string[] | undefined) ?? [];
+    // the box is not moved while the user scrolls in it or selects in it
+    const atEnd = lines.scrollTop + lines.clientHeight >= lines.scrollHeight - 4;
+    lines.value = all.join("\n");
+    if (atEnd) lines.scrollTop = lines.scrollHeight;
+    const st = got[PERF_SERVER_KEY] as PerfServer | undefined;
+    server.className = `small ${st?.ok ? "ok" : st && st.why !== "none" ? "err" : "muted"}`;
+    server.textContent = !st
+      ? t("optPerfKept")
+      : st.ok
+        ? t("optPerfFile", { file: st.file })
+        : st.why === "old"
+          ? t("optPerfOld")
+          : st.why === "error"
+            ? t("optPerfError", { error: st.error ?? "" })
+            : t("optPerfNone");
+  };
+  void perfPaint();
+  return [
+    h("h2", {}, t("optPerf")),
+    h("p", { class: "muted small" }, t("optPerfHelp")),
+    h(
+      "label",
+      { class: "line" },
+      checkbox(settings.perfLog, (v) => void update((s) => void (s.perfLog = v))),
+      t("optPerfOn"),
+    ),
+    lines,
+    h("div", { class: "line" }, copy, clear, server),
+  ];
+}
+
+/** Shows the performance log as it is stored now (set by perfSection). */
+let perfPaint: () => Promise<void> = () => Promise.resolve();
+
 function render(): void {
   painters.length = 0;
   const addServer = h("button", {}, t("optAdd"));
@@ -296,12 +360,12 @@ function render(): void {
     h("div", { id: "tools" }),
     h("h2", {}, t("optBehavior")),
     settingRow("autoSend", t("optAutoSend")),
-    settingRow("maxRounds", t("optMaxRounds")),
     settingRow("maxResultChars", t("optMaxChars")),
     settingRow("callTimeoutSec", t("optTimeout")),
     h("h2", {}, t("optLearned")),
     h("p", { class: "muted small" }, t("optLearnedHelp")),
     h("div", { id: "layouts" }),
+    ...perfSection(),
   );
   renderTools();
   void renderLayouts();
@@ -313,6 +377,7 @@ async function main(): Promise<void> {
   render();
   // a tool allowed on Gemini's page shows here at once (the rest of the page keeps what is being typed)
   chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === "session" && (changes[PERF_LINES_KEY] || changes[PERF_SERVER_KEY])) void perfPaint();
     if (area === "local" && changes[LAYOUTS_KEY]) void renderLayouts();
     if (area !== "local" || !changes.settings) return;
     void loadSettings().then((fresh) => {

@@ -33,7 +33,6 @@ HOW IT WORKS
 YOU STAY IN CONTROL
 • Every call waits for your Run, unless you allowed that tool to run by itself on that site.
 • Calls in old conversations never run: only replies written while you watch.
-• After 20 automatic rounds the extension pauses and asks.
 • The extension reaches only 127.0.0.1 and localhost.
 
 WHAT YOU NEED

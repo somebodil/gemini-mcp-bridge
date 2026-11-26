@@ -27,6 +27,7 @@ import {
   type Role,
 } from "./layout.ts";
 import { buttonOf, composerOf, deepElements, deepTarget, editableOf, isButtonish, isOurs, parentOf, selectAllIn, SEND, shadowOf, short, STOP, typeText, valueOf } from "./page.ts";
+import { timed } from "./perf.ts";
 
 const TICK_MS = 300;
 /** The reply's text unchanged this long, and the indicator back: the reply is finished. */
@@ -181,7 +182,7 @@ export class Learner {
     window.addEventListener("focusin", this.onFocus, true);
     window.addEventListener("click", this.onClick, true);
     window.addEventListener("keydown", this.onKey, true);
-    this.timer = setInterval(() => this.tick(), TICK_MS);
+    this.timer = setInterval(timed("learn.tick", () => this.tick()), TICK_MS);
   }
 
   // -------------------------------------------------------------------------------------------------------
@@ -191,11 +192,11 @@ export class Learner {
     return e.composedPath().some((n) => n instanceof Element && isOurs(n));
   }
 
-  private readonly onFocus = (e: FocusEvent) => {
+  private readonly onFocus = timed("learn.focusin", (e: FocusEvent) => {
     if (!e.isTrusted || this.sent || this.attempt || this.ours(e)) return;
     const ed = editableOf(deepTarget(e));
     if (ed) setTimeout(() => this.useInput(ed), 0);
-  };
+  });
 
   /** The box the user clicked is the input box: the test message goes in, in place of what was there. */
   private useInput(ed: HTMLElement): void {
@@ -230,7 +231,7 @@ export class Learner {
     return !!box && valueOf(box).includes(this.nonce);
   }
 
-  private readonly onClick = (e: MouseEvent) => {
+  private readonly onClick = timed("learn.click", (e: MouseEvent) => {
     if (!e.isTrusted || this.sent || this.ours(e)) return;
     const ed = editableOf(deepTarget(e));
     if (ed) {
@@ -242,14 +243,14 @@ export class Learner {
     const b = hit && pressable(hit);
     // in the capture phase, before the page does anything: how the buttons look before the message goes
     if (b) this.attempt = { at: Date.now(), button: b, before: this.sample().looks };
-  };
+  });
 
-  private readonly onKey = (e: KeyboardEvent) => {
+  private readonly onKey = timed("learn.keydown", (e: KeyboardEvent) => {
     if (!e.isTrusted || e.key !== "Enter" || e.shiftKey || e.isComposing || e.keyCode === 229 || this.sent) return;
     const ed = editableOf(deepTarget(e));
     if (!ed || ed !== this.inputNow() || !this.holdsMessage()) return;
     this.attempt = { at: Date.now(), button: null, before: this.sample().looks, mod: e.ctrlKey || e.metaKey };
-  };
+  });
 
   // -------------------------------------------------------------------------------------------------------
   // Watching

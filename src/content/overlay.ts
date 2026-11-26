@@ -4,6 +4,7 @@
 import { SHADOW_MODE } from "../shared/dom.ts";
 import { t } from "../shared/i18n.ts";
 import type { Role } from "./layout.ts";
+import { timed } from "./perf.ts";
 
 export const ROLE_COLOR: Record<Role, string> = {
   input: "#1a73e8",
@@ -55,7 +56,7 @@ export class Overlay {
     if (!this.host.isConnected) document.documentElement.append(this.host);
     this.refresh();
     if (!this.timer) {
-      this.timer = setInterval(() => this.refresh(), 1000);
+      this.timer = setInterval(timed("outline.refresh", () => this.refresh()), 1000);
       window.addEventListener("scroll", this.onMove, true);
       window.addEventListener("resize", this.onMove);
     }
@@ -73,9 +74,11 @@ export class Overlay {
     this.items = [];
   }
 
+  private readonly drawFrame = timed("outline.draw", () => this.draw());
+
   private readonly onMove = () => {
     cancelAnimationFrame(this.frame);
-    this.frame = requestAnimationFrame(() => this.draw());
+    this.frame = requestAnimationFrame(this.drawFrame);
   };
 
   private refresh(): void {

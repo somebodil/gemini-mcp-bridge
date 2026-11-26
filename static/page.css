@@ -151,3 +151,9 @@ tr.has-sites td {
 .checks div {
   word-break: break-word;
 }
+textarea.perf {
+  box-sizing: border-box;
+  width: 100%;
+  font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  white-space: pre;
+}

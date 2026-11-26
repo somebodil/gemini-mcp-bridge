@@ -13,6 +13,7 @@ import { checkLayout, Learner, outlineItems, withPicked, type RoleResult } from 
 import { Overlay } from "./overlay.ts";
 import { Picker } from "./picker.ts";
 import { dbg, deepTarget, editableOf, inputAreaRects, isOurs, pageStructure, short, sleep, type Finished, type Page } from "./page.ts";
+import { measure, perfRunning, startPerf, stopPerf, timed } from "./perf.ts";
 import { installPageStyle, pageIsDark, Pill, removePageStyle, setTheme, type FlowView, type LearnBox, type Notice, type Row } from "./ui.ts";
 
 /** Where the exchange that went out last stands, for the status line. */
@@ -44,7 +45,6 @@ export function startBridge(page: Page): () => void {
   let stopped = false;
   let notice: Notice | null = null;
   let userStopped = false;
-  let rounds = 0;
   /** True while a send of the user is held back to add text in front of it. */
   let holding = false;
   /** The extension's send of the user's message did not go: the next one is left to the page as it is. */
@@ -133,8 +133,25 @@ export function startBridge(page: Page): () => void {
     if (s && !s.error) {
       state = s;
       stateAt = Date.now();
+      syncPerf();
     }
     render();
+  }
+
+  /** The performance log runs while the settings say so. */
+  function syncPerf(): void {
+    const want = !!state?.perfLog && !stopped;
+    if (want && !perfRunning()) startPerf(sendPerf, `extension ${chrome.runtime.getManifest().version}, ${page.kind === "generic" ? "generic mode" : "gemini.google.com"}`);
+    else if (!want && perfRunning()) stopPerf();
+  }
+
+  /** Not through send(): the last lines go out after stop(), and an extension that is gone just loses them. */
+  function sendPerf(lines: string[]): void {
+    try {
+      void chrome.runtime.sendMessage<Request>({ type: "perf", lines }).catch(() => undefined);
+    } catch {
+      // the extension was reloaded
+    }
   }
 
   /** A tool list no older than half a minute, waiting at most `maxWait` for it (a hung server must not hold the page). */
@@ -257,9 +274,7 @@ export function startBridge(page: Page): () => void {
     }
     dbg("user send", e.type, { active: active(), tools: state?.tools.length });
     if (!active()) return;
-    rounds = 0;
     userStopped = false;
-    if (notice?.kind === "paused") notice = null;
     if (passNext || (!pendingResults && (!state || state.tools.length === 0))) {
       // after a send of the extension's that did not go, the text is in the box as it was to go: the page sends it
       passNext = false;
@@ -366,8 +381,8 @@ export function startBridge(page: Page): () => void {
         leaveConversation();
       }
     }
-    setTheme(pageIsDark());
-    const finished = page.tick(active() && !learner, run !== null);
+    measure("tick.theme", () => setTheme(pageIsDark()));
+    const finished = measure("tick.page", () => page.tick(active() && !learner, run !== null));
     if (flow?.stage === "sent" && page.progress()?.writing) flow.wroteAt = Date.now();
     if (flowText() !== lastFlowText) render();
     if (!finished) return;
@@ -393,7 +408,6 @@ export function startBridge(page: Page): () => void {
   /** Another conversation: nothing of this one goes there. */
   function leaveConversation(): void {
     run?.abort();
-    rounds = 0;
     notice = null;
     pendingResults = null;
     passNext = false;
@@ -423,27 +437,6 @@ export function startBridge(page: Page): () => void {
       render();
       return;
     }
-    // the limit holds before anything runs: the calls of this reply wait for "Continue"
-    if (rounds >= (state?.behavior.maxRounds ?? 20)) {
-      flow = null;
-      for (const it of items) it.card.setCalls(it.calls, it.problems, "skipped");
-      notice = {
-        kind: "paused",
-        text: t("paused", { n: rounds }),
-        action: {
-          label: t("continue"),
-          run: () => {
-            rounds = 0;
-            notice = null;
-            render();
-            void handleReply(f);
-          },
-        },
-      };
-      render();
-      return;
-    }
-
     const ctrl = new AbortController();
     run = ctrl;
     try {
@@ -572,7 +565,6 @@ export function startBridge(page: Page): () => void {
     setFlow({ stage: "sending", at: Date.now() });
     const text = draft ? `${message}\n\n${draft}` : message;
     page.replaceText(text);
-    rounds++;
     page.expect(text);
     // an Enter of the user's meanwhile would send a second time
     holding = true;
@@ -743,7 +735,10 @@ export function startBridge(page: Page): () => void {
   // -------------------------------------------------------------------------------------------------------
 
   function render(): void {
-    if (stopped) return;
+    if (!stopped) measure("render", draw);
+  }
+
+  function draw(): void {
     const flowNow = flowView();
     lastFlowText = flowText(flowNow);
     pill.render({
@@ -780,9 +775,11 @@ export function startBridge(page: Page): () => void {
   function stop(): void {
     if (stopped) return;
     stopped = true;
+    // its last lines (turned off in the tab, the page left; turned off in the options, they are not kept)
+    stopPerf();
     clearInterval(timer);
-    window.removeEventListener("keydown", onKeyDown, true);
-    window.removeEventListener("click", onClick, true);
+    window.removeEventListener("keydown", keyHandler, true);
+    window.removeEventListener("click", clickHandler, true);
     document.removeEventListener("visibilitychange", onVisible);
     try {
       chrome.storage.onChanged.removeListener(onStorage);
@@ -803,11 +800,13 @@ export function startBridge(page: Page): () => void {
 
   installPageStyle();
   setTheme(pageIsDark());
-  window.addEventListener("keydown", onKeyDown, true);
-  window.addEventListener("click", onClick, true);
+  const keyHandler = timed("keydown", onKeyDown);
+  const clickHandler = timed("click", onClick);
+  window.addEventListener("keydown", keyHandler, true);
+  window.addEventListener("click", clickHandler, true);
   chrome.storage.onChanged.addListener(onStorage);
   document.addEventListener("visibilitychange", onVisible);
-  const timer = setInterval(tick, TICK_MS);
+  const timer = setInterval(timed("tick", tick), TICK_MS);
   void refreshState();
   if (page.kind === "generic")
     void loadLayout().then((l) => {
