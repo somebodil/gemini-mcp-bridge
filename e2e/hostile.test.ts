@@ -55,6 +55,7 @@ interface Opts {
   canvas?: boolean;
   lateMine?: number;
   swapLate?: number;
+  deepEditor?: number;
 }
 
 type MockWindow = { __sent: string[]; __feedback: number; __sidebar: number; __root: ShadowRoot | HTMLElement; __switch: () => void };
@@ -166,6 +167,21 @@ describe("hostile chat pages, learned", () => {
       await learn(c.page, "click");
       await closeResults(c.page);
       await roundTrip(c, "click");
+    } finally {
+      await c.page.close();
+    }
+  });
+
+  it("an input box deep inside its composer (as on Gemini), learned with Enter: the send button and the stop button are found", async () => {
+    await h.setSettings(auto("list_directory"));
+    const c = await open({ deepEditor: 8 }, replies());
+    try {
+      await learn(c.page, "Enter");
+      const l = await stored();
+      assert.ok(l?.send, "the send button, by its name");
+      assert.ok(l?.busy, "the stop button, as the sign of writing");
+      await closeResults(c.page);
+      await roundTrip(c, "Enter");
     } finally {
       await c.page.close();
     }

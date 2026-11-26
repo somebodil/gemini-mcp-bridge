@@ -1,7 +1,7 @@
 // Picking an element on the page by hand, as the element picker of the developer tools does: a clear layer over
 // the whole page takes the clicks (the page does not react to them), the element under the pointer is outlined
-// with its name, ↑ goes one layer out, ↓ one layer back in, a click or Enter picks, Esc cancels. The wheel
-// still scrolls what is under the pointer.
+// with its name, ↑ goes one layer out, ↓ one layer back in, ← and → to the element before and after it in the
+// same layer, a click or Enter picks, Esc cancels. The wheel still scrolls what is under the pointer.
 
 import { SHADOW_MODE } from "../shared/dom.ts";
 import type { Role } from "./layout.ts";
@@ -42,11 +42,22 @@ function scrollerOf(el: Element | null): Element | null {
   return document.scrollingElement;
 }
 
+/** The element before (-1) or after (1) `el` in its layer, of those that show (the extension's own left out). */
+function siblingOf(el: Element, dir: 1 | -1): Element | null {
+  const step = (e: Element) => (dir > 0 ? e.nextElementSibling : e.previousElementSibling);
+  for (let s = step(el); s; s = step(s)) {
+    if (isOurs(s)) continue;
+    const r = s.getBoundingClientRect();
+    if (r.width > 0 && r.height > 0) return s;
+  }
+  return null;
+}
+
 export class Picker {
   private readonly host: HTMLElement;
   private readonly root: ShadowRoot;
   private readonly role: Role;
-  /** The element under the pointer, and the one outlined (↑ and ↓ move from it). */
+  /** The element under the pointer, and the one outlined (the arrow keys move from it). */
   private hovered: Element | null = null;
   private current: Element | null = null;
   /** The elements ↑ came from, for ↓. */
@@ -73,7 +84,6 @@ export class Picker {
     window.addEventListener("scroll", this.onScroll, true);
   }
 
-  /** What is outlined now. */
   /** Nothing of a click reaches the page; the click itself picks. */
   private readonly swallow = (e: Event) => {
     e.preventDefault();
@@ -121,6 +131,16 @@ export class Picker {
       const first = deepElements(cur).next();
       const down: Element | null = this.inner.pop() ?? (first.done ? null : first.value);
       if (down) this.select(down);
+    } else if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && cur) {
+      const side = siblingOf(cur, e.key === "ArrowRight" ? 1 : -1);
+      if (side) {
+        // another branch: ↓ no longer goes back to where ↑ came from
+        this.inner = [];
+        const r = side.getBoundingClientRect();
+        // out of sight (an earlier message): the page scrolls to it, and the outline follows the scroll
+        if (r.bottom < 0 || r.top > innerHeight || r.right < 0 || r.left > innerWidth) side.scrollIntoView({ block: "nearest", inline: "nearest" });
+        this.select(side);
+      }
     } else return;
     e.preventDefault();
     e.stopImmediatePropagation();

@@ -90,15 +90,19 @@ export function inputAreaRects(els: Element[]): DOMRect[] {
 }
 
 /** The box around the input box `ed` with its buttons: its largest ancestor not much taller than it, not page-wide. */
-export function composerRect(ed: Element): DOMRect {
+export function composerOf(ed: Element): Element {
+  let top = ed;
   let r = ed.getBoundingClientRect();
-  for (let el = parentOf(ed), i = 0; el && i < 8; el = parentOf(el), i++) {
+  for (let el = parentOf(ed), i = 0; el && i < 12; el = parentOf(el), i++) {
     const b = el.getBoundingClientRect();
     if (b.height > Math.max(r.height + 150, 220) || b.width > innerWidth * 0.95) break;
     r = b;
+    top = el;
   }
-  return r;
+  return top;
 }
+
+export const composerRect = (ed: Element): DOMRect => composerOf(ed).getBoundingClientRect();
 
 /** With localStorage["gmb-debug"] = "1" on the page, the steps go to the console. */
 export function dbg(...args: unknown[]): void {

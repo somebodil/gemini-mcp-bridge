@@ -26,7 +26,7 @@ import {
   type Locator,
   type Role,
 } from "./layout.ts";
-import { buttonOf, deepElements, deepTarget, editableOf, isButtonish, isOurs, parentOf, selectAllIn, SEND, shadowOf, short, STOP, typeText, valueOf } from "./page.ts";
+import { buttonOf, composerOf, deepElements, deepTarget, editableOf, isButtonish, isOurs, parentOf, selectAllIn, SEND, shadowOf, short, STOP, typeText, valueOf } from "./page.ts";
 
 const TICK_MS = 300;
 /** The reply's text unchanged this long, and the indicator back: the reply is finished. */
@@ -98,15 +98,20 @@ interface Busy {
 
 
 /** Buttons near `from`: in its parent, its grandparent and so on, nearest first. */
-function buttonsNear(from: Element, levels = 4, max = 60): Element[] {
+function buttonsNear(from: Element, max = 60): Element[] {
   const out = new Set<Element>();
+  // four levels up, and on to the box that holds the input box and its buttons: an input box may sit deep inside
+  // it (Gemini's), with the send and stop buttons beside the outer layers
+  const top = composerOf(from);
+  let reached = top === from;
   let scope: Element | null = from;
   let inner: Element | undefined;
-  for (let level = 0; scope && level < levels && out.size < max; level++, inner = scope, scope = parentOf(scope)) {
+  for (let level = 0; scope && (level < 4 || !reached) && out.size < max; level++, inner = scope, scope = parentOf(scope)) {
     for (const el of deepElements(scope, inner)) {
       if (isButtonish(el)) out.add(el);
       if (out.size >= max) break;
     }
+    if (scope === top) reached = true;
   }
   return [...out];
 }

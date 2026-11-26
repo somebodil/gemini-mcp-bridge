@@ -31,6 +31,7 @@
       //   mentions     "@" opens a list of people under the box; Enter picks from it (aria-expanded on the box)
       //   canvas       a tall document one writes in beside the chat (contenteditable, Enter is a new line there)
       //   lateMine: N  the user's message is drawn only N ms after it went (a server that answers first)
+      //   deepEditor: N  the input box N wrappers deep in the composer, the buttons outside them (Gemini's is)
       //   swapLate: N  N ms after a reply is finished its code blocks are drawn otherwise (a heading with the
       //                language and a Copy button, line numbers): other elements, other text
       //   window.__switch(): another conversation opened from the list: the address changes at once, the other
@@ -56,6 +57,7 @@
           align-items: end; border: 1px solid #bbb; border-radius: 14px; padding: 8px; background: #fff; box-sizing: border-box; }
         .editor { flex: 1; min-height: 24px; max-height: 240px; overflow-y: auto; white-space: pre-wrap; outline: none; font: inherit; }
         textarea.editor { border: 0; resize: none; }
+        .wrap { flex: 1; display: flex; min-width: 0; }
         .send { width: 32px; height: 32px; border-radius: 50%; border: 0; cursor: pointer; flex: none; background: #1a73e8 center / 14px no-repeat
           url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'%3E%3Cpath d='M5 1 9 6H6v3H4V6H1z' fill='white'/%3E%3C/svg%3E"); }
         .send.is-stop { background: #c5221f; }
@@ -258,7 +260,19 @@
         composer.append(fb);
       }
       editor = makeEditor();
-      composer.prepend(editor);
+      if (O.deepEditor) {
+        const outer = document.createElement("div");
+        outer.className = "wrap";
+        let cur = outer;
+        for (let i = 1; i < O.deepEditor; i++) {
+          const w = document.createElement("div");
+          w.className = "wrap";
+          cur.append(w);
+          cur = w;
+        }
+        cur.append(editor);
+        composer.prepend(outer);
+      } else composer.prepend(editor);
       composer.append(sendBtn);
 
       function update() {

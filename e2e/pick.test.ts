@@ -1,6 +1,6 @@
 // Picking parts of the page by hand after learning (generic mode, the mock chat page): the (?) table of what to pick,
-// the picker (a click goes to the picker, not the page; ↑ goes one layer out; Enter picks; Esc cancels), and what a
-// picked part does.
+// the picker (a click goes to the picker, not the page; ↑ goes one layer out; ← and → go to the element before and
+// after; Enter picks; Esc cancels), and what a picked part does.
 
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -114,6 +114,41 @@ describe("picking parts by hand", () => {
       const l = await stored();
       assert.deepEqual(l?.picked, ["reply"]);
       assert.deepEqual(await matching(page, l?.reply), ["div.msg.model"]);
+    } finally {
+      await page.close();
+    }
+  });
+
+  it("← and → go to the element before and after in the same layer, and stay at its ends", async () => {
+    const page = await open();
+    try {
+      await learn(page);
+      await pick(page, "mine");
+      // from the text of the reply: out to the whole reply, then to the message before it (the user's)
+      await pointAt(page, "chat-app .msg.model p");
+      await page.keyboard.press("ArrowUp");
+      await picking(page).filter({ hasText: "div.msg.model" }).waitFor();
+      await page.keyboard.press("ArrowLeft");
+      await picking(page).filter({ hasText: "div.msg.user" }).waitFor();
+      // nothing before the first message: it stays
+      await page.keyboard.press("ArrowLeft");
+      await page.keyboard.press("ArrowRight");
+      await picking(page).filter({ hasText: "div.msg.model" }).waitFor();
+      // nothing after the last one either
+      await page.keyboard.press("ArrowRight");
+      await page.keyboard.press("ArrowLeft");
+      await picking(page).filter({ hasText: "div.msg.user" }).waitFor();
+      // ↓ goes into this message, not back to the reply ↑ came from
+      await page.keyboard.press("ArrowDown");
+      await page.waitForFunction(() => !document.querySelector("gmb-status")?.shadowRoot?.querySelector(".learn .current")?.textContent?.includes("div.msg"));
+      assert.doesNotMatch((await page.locator("gmb-status .learn .current").textContent()) ?? "", /model/);
+      await page.keyboard.press("ArrowUp");
+      await picking(page).filter({ hasText: "div.msg.user" }).waitFor();
+      await page.keyboard.press("Enter");
+      await box(page).filter({ hasText: "What the extension learned" }).waitFor();
+      const l = await stored();
+      assert.deepEqual(l?.picked, ["mine"]);
+      assert.deepEqual(await matching(page, l?.mine), ["div.msg.user"]);
     } finally {
       await page.close();
     }

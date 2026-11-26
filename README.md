@@ -107,7 +107,7 @@ On a page other than gemini.google.com, for example Gemini Enterprise (`vertexai
 1. Click the input box: a test message goes in. It asks for one short JSON code block back.
 2. Send it, with the send button or Enter (Ctrl+Enter on a page that sends that way: the extension then leaves Enter alone there and sends with Ctrl+Enter too). Meanwhile the extension only watches: nothing goes along with the message, and no tool runs.
 3. A list of steps fills in as the extension sees each part: the input box, the send button, what shows that the page is writing (most often a stop button), your message, the reply, and the code block in it. When everything was seen, press **Stop learning**.
-4. The extension lists what it learned and outlines each part on the page: ✓ sure, ? a guess, ✗ not found. If a part is wrong, press **Pick** beside it and click the right element on the page: ↑ goes one layer out, ↓ back in, Enter picks, Esc cancels. The **?** beside it shows a table of what to pick for each part. Or press **Learn again**.
+4. The extension lists what it learned and outlines each part on the page: ✓ sure, ? a guess, ✗ not found. If a part is wrong, press **Pick** beside it and click the right element on the page: ↑ goes one layer out, ↓ back in, ← and → go to the element before and after it in the same layer, Enter picks, Esc cancels. The **?** beside it shows a table of what to pick for each part. Or press **Learn again**.
 
 What it learned is kept for the site (its address without the path) and used in every tab of it. The options page lists the learned sites; delete one to go back to guessing there.
 
