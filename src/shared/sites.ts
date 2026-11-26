@@ -1,10 +1,11 @@
-// Where an "Auto" tool runs without asking: a list of site patterns per tool. A pattern is a regular expression
-// that has to match the whole address of the site (its origin: scheme, host and port), as
-// https://gemini\.google\.com or https://(chat|www)\.example\.com. On every other site the tool is asked about.
+// Where the "Auto" tools run without asking: one list of site patterns for all of them. A pattern is a regular
+// expression that has to match the whole address of the site (its origin: scheme, host and port), as
+// https://gemini\.google\.com or https://(chat|www)\.example\.com. On every other site they are asked about.
 
 import type { Policy, Settings } from "./config.ts";
 
-/** Gemini's site: where every "Auto" stored before sites existed was given (the extension knew no other page). */
+/** Gemini's site: the list as it starts, and where every "Auto" stored before sites existed ran (the extension knew
+ * no other page). */
 export const GEMINI_SITE = "https://gemini\\.google\\.com";
 
 /** The pattern of one site: its address, with the characters that mean something in a regular expression escaped. */
@@ -48,24 +49,23 @@ export function own<T>(record: Record<string, T>, key: string): T | undefined {
   return Object.hasOwn(record, key) ? record[key] : undefined;
 }
 
-/** The policies as they apply on one site: an "Auto" tool whose patterns miss the site is asked about there. */
+/** The policies as they apply on one site: where the patterns miss the site, the "Auto" tools are asked about. */
 export function policiesOn(s: Pick<Settings, "policies" | "autoSites">, origin: string): Record<string, Policy> {
   const out = { ...s.policies };
-  for (const [name, p] of Object.entries(out)) if (p === "auto" && !allowedOn(own(s.autoSites, name) ?? [], origin)) out[name] = "ask";
+  if (allowedOn(s.autoSites, origin)) return out;
+  for (const [name, p] of Object.entries(out)) if (p === "auto") out[name] = "ask";
   return out;
 }
 
 /**
- * "Always allow" pressed on a site: the tool becomes "Auto" there. An "Auto" tool gets the site added to its list;
- * an "Ask" one has no list (normalizeSettings), and gets one of that site alone. An "Off" tool stays off: it was
- * turned off after its card showed.
+ * "Always allow" pressed on a site: the tool becomes "Auto", and the site joins the list, so that the other "Auto"
+ * tools run there without asking too (the button's title says so). An "Off" tool stays off: it was turned off after
+ * its card showed.
  */
 export function allowSite(s: Settings, tool: string, origin: string): void {
   if (own(s.policies, tool) === "off" || tool === "__proto__") return;
-  const sites = [...(own(s.autoSites, tool) ?? [])];
-  if (!allowedOn(sites, origin)) sites.push(sitePattern(origin));
   s.policies[tool] = "auto";
-  s.autoSites[tool] = sites;
+  if (!allowedOn(s.autoSites, origin)) s.autoSites = [...s.autoSites, sitePattern(origin)];
 }
 
 /**

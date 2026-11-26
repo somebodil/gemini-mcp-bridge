@@ -126,7 +126,7 @@ describe("generic mode", () => {
     }));
 
   it("an Auto tool of another site waits for Run here; Always allow here adds this site, and the next call runs", async () => {
-    // Auto as stored before sites: Gemini's
+    // the sites as they start: Gemini's
     await h.setSettings({ policies: { list_directory: "auto" } });
     await withChat([call("list_directory", { path: h.dir }), call("list_directory", { path: h.dir }), "There is a-file.txt."], async (m) => {
       await say(m.page, "What is in my folder?");
@@ -135,7 +135,7 @@ describe("generic mode", () => {
       await waitLog(m, /answer without calls/);
       assert.deepEqual(h.calls, ["list_directory", "list_directory"]);
       const s = await h.worker.evaluate(async () => (await chrome.storage.local.get("settings")).settings as Settings);
-      assert.deepEqual(s.autoSites.list_directory, ["https://gemini\\.google\\.com", "https://chat\\.example\\.test"]);
+      assert.deepEqual(s.autoSites, ["https://gemini\\.google\\.com", "https://chat\\.example\\.test"]);
     });
   });
 

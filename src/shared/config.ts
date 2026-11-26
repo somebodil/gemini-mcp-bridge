@@ -27,8 +27,9 @@ export interface Settings extends Behavior {
   servers: ServerConfig[];
   /** Per exposed tool name. A tool without an entry is asked about. */
   policies: Record<string, Policy>;
-  /** Per "Auto" tool: the sites where it runs without asking (regular expressions of whole site addresses, sites.ts). */
-  autoSites: Record<string, string[]>;
+  /** The sites where the "Auto" tools run without asking, one list for all of them (regular expressions of whole
+   * site addresses, sites.ts). */
+  autoSites: string[];
   callTimeoutSec: number;
   /** The performance log (content/perf.ts): off unless the user turns it on. */
   perfLog: boolean;
@@ -40,7 +41,7 @@ export const DEFAULT_SETTINGS: Settings = {
   enabled: true,
   servers: [{ id: "local", name: "local", url: DEFAULT_URL, token: "", enabled: true }],
   policies: {},
-  autoSites: {},
+  autoSites: [GEMINI_SITE],
   autoSend: true,
   maxResultChars: 20000,
   callTimeoutSec: 300,
@@ -70,15 +71,6 @@ export function normalizeSettings(got: Partial<Settings> | undefined): Settings 
   const num = (v: unknown, d: number, min: number, max: number) => (typeof v === "number" && Number.isFinite(v) ? Math.min(max, Math.max(min, Math.round(v))) : d);
   const policies: Record<string, Policy> = {};
   if (typeof s.policies === "object" && s.policies) for (const [k, v] of Object.entries(s.policies)) if (POLICIES.has(v)) policies[k] = v;
-  // only "Auto" tools have sites: one set to Ask or Off forgets them. An "Auto" without a list (stored before there
-  // were sites, or just chosen on the options page) is Gemini's; an emptied list stays empty
-  const autoSites: Record<string, string[]> = {};
-  const lists = typeof s.autoSites === "object" && s.autoSites ? (s.autoSites as Record<string, unknown>) : {};
-  for (const [k, p] of Object.entries(policies)) {
-    if (p !== "auto" || k === "__proto__") continue;
-    const v = Object.hasOwn(lists, k) ? lists[k] : undefined;
-    autoSites[k] = Array.isArray(v) ? [...new Set(v.filter((x): x is string => typeof x === "string").map((x) => x.trim()).filter(Boolean))] : [GEMINI_SITE];
-  }
   return {
     enabled: s.enabled !== false,
     servers: Array.isArray(s.servers)
@@ -93,12 +85,26 @@ export function normalizeSettings(got: Partial<Settings> | undefined): Settings 
           }))
       : DEFAULT_SETTINGS.servers,
     policies,
-    autoSites,
+    autoSites: siteList(s.autoSites, policies),
     autoSend: s.autoSend !== false,
     maxResultChars: num(s.maxResultChars, DEFAULT_SETTINGS.maxResultChars, 1000, 200000),
     callTimeoutSec: num(s.callTimeoutSec, DEFAULT_SETTINGS.callTimeoutSec, 5, 3600),
     perfLog: s.perfLog === true,
   };
+}
+
+/**
+ * The sites of the "Auto" tools, without blanks or repeats; an emptied list stays empty. Kept per tool (0.4.0 and
+ * before), they become one list of the sites of every "Auto" tool, where one without a list there (stored before
+ * there were sites) ran on Gemini.
+ */
+function siteList(v: unknown, policies: Record<string, Policy>): string[] {
+  const clean = (l: unknown) => (Array.isArray(l) ? l.filter((x): x is string => typeof x === "string").map((x) => x.trim()).filter(Boolean) : [GEMINI_SITE]);
+  if (Array.isArray(v)) return [...new Set(clean(v))];
+  if (typeof v !== "object" || !v) return [GEMINI_SITE];
+  const perTool = v as Record<string, unknown>;
+  const auto = Object.keys(policies).filter((k) => policies[k] === "auto");
+  return auto.length ? [...new Set(auto.flatMap((k) => clean(Object.hasOwn(perTool, k) ? perTool[k] : undefined)))] : [GEMINI_SITE];
 }
 
 /** The extension asks only for 127.0.0.1 and localhost: these are the URLs it can reach. */

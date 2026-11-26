@@ -92,55 +92,65 @@ describe("readSites", () => {
 
 describe("Auto per site", () => {
   const settings = (s: Partial<Settings>) => normalizeSettings({ ...DEFAULT_SETTINGS, ...s });
+  // what 0.4.0 and before kept: a list per tool
+  const old = (s: { policies: Settings["policies"]; autoSites?: unknown }) => normalizeSettings(s as unknown as Partial<Settings>);
 
-  it("an Auto stored before sites, or just chosen, is Gemini's", () => {
-    const s = settings({ policies: { a: "auto", b: "ask" } });
-    assert.deepEqual(s.autoSites, { a: [GEMINI_SITE] });
-    // an emptied list stays empty: the tool is asked about everywhere
-    assert.deepEqual(settings({ policies: { a: "auto" }, autoSites: { a: [] } }).autoSites, { a: [] });
+  it("one list for every Auto tool, Gemini at first; an emptied list stays empty", () => {
+    assert.deepEqual(settings({ policies: { a: "auto", b: "ask" } }).autoSites, [GEMINI_SITE]);
+    assert.deepEqual(normalizeSettings(undefined).autoSites, [GEMINI_SITE]);
+    assert.deepEqual(settings({ autoSites: [] }).autoSites, []);
+    // the list stays when no tool is Auto
+    assert.deepEqual(settings({ policies: { a: "ask" }, autoSites: ["https://chat\\.test"] }).autoSites, ["https://chat\\.test"]);
   });
 
-  it("cleans up the lists, and keeps them only for Auto tools", () => {
+  it("cleans up the list", () => {
     // @ts-expect-error: what a broken storage may hold
-    const s = settings({ policies: { a: "auto", c: "ask" }, autoSites: { a: [" x ", "x", "", 3, null], b: ["y"], c: ["z"] } });
-    assert.deepEqual(s.autoSites, { a: ["x"] });
+    assert.deepEqual(settings({ autoSites: [" x ", "x", "", 3, null, "y"] }).autoSites, ["x", "y"]);
     // @ts-expect-error: not a list
-    assert.deepEqual(settings({ policies: { a: "auto" }, autoSites: { a: "x" } }).autoSites, { a: [GEMINI_SITE] });
+    assert.deepEqual(settings({ autoSites: "x" }).autoSites, [GEMINI_SITE]);
   });
 
-  it("an Auto tool is asked about on a site its patterns miss", () => {
-    const s = settings({ policies: { a: "auto", b: "auto", c: "off", d: "ask" }, autoSites: { a: [GEMINI_SITE], b: ["https://chat\\.test"] } });
-    assert.deepEqual(policiesOn(s, GEMINI), { a: "auto", b: "ask", c: "off", d: "ask" });
-    assert.deepEqual(policiesOn(s, "https://chat.test"), { a: "ask", b: "auto", c: "off", d: "ask" });
+  it("a list per tool, kept before, becomes one list of the sites of the Auto tools", () => {
+    const s = old({ policies: { a: "auto", b: "auto", c: "ask", d: "auto" }, autoSites: { a: [GEMINI_SITE], b: [" https://chat\\.test", GEMINI_SITE, 3], c: ["https://ask\\.test"] } });
+    // d had no list: it ran on Gemini; c is not Auto, so its sites never counted
+    assert.deepEqual(s.autoSites, [GEMINI_SITE, "https://chat\\.test"]);
+    assert.deepEqual(old({ policies: { a: "auto" }, autoSites: { a: [] } }).autoSites, [], "an emptied list stays empty");
+    assert.deepEqual(old({ policies: { a: "ask" }, autoSites: {} }).autoSites, [GEMINI_SITE]);
+    assert.deepEqual(old({ policies: JSON.parse('{"toString": "auto"}') as Settings["policies"], autoSites: {} }).autoSites, [GEMINI_SITE], "a name every object inherits");
+  });
+
+  it("the Auto tools are asked about on a site the patterns miss", () => {
+    const s = settings({ policies: { a: "auto", b: "auto", c: "off", d: "ask" }, autoSites: [GEMINI_SITE, "https://chat\\.test"] });
+    assert.deepEqual(policiesOn(s, GEMINI), { a: "auto", b: "auto", c: "off", d: "ask" });
+    assert.deepEqual(policiesOn(s, "https://chat.test"), { a: "auto", b: "auto", c: "off", d: "ask" });
+    assert.deepEqual(policiesOn(s, "https://evil.test"), { a: "ask", b: "ask", c: "off", d: "ask" });
     assert.deepEqual(policiesOn(s, ""), { a: "ask", b: "ask", c: "off", d: "ask" });
   });
 
-  it("Always allow adds the site to an Auto tool, and starts a new list for any other", () => {
-    const s = settings({ policies: { a: "auto", b: "ask" }, autoSites: { a: [GEMINI_SITE], b: [GEMINI_SITE] } });
-    allowSite(s, "a", "https://chat.test");
-    assert.deepEqual(s.autoSites.a, [GEMINI_SITE, "https://chat\\.test"]);
-    allowSite(s, "a", "https://chat.test");
-    assert.deepEqual(s.autoSites.a, [GEMINI_SITE, "https://chat\\.test"], "not twice");
-    // b was set to Ask: Gemini, where it ran without asking before, stays off
-    allowSite(s, "b", "http://127.0.0.1:5173");
+  it("Always allow makes the tool Auto and adds the site to the list, once", () => {
+    const s = settings({ policies: { a: "auto", b: "ask" } });
+    allowSite(s, "b", "https://chat.test");
     assert.equal(s.policies.b, "auto");
-    assert.deepEqual(s.autoSites.b, ["http://127\\.0\\.0\\.1:5173"]);
+    assert.deepEqual(s.autoSites, [GEMINI_SITE, "https://chat\\.test"]);
+    allowSite(s, "a", "https://chat.test");
     allowSite(s, "new", GEMINI);
-    assert.deepEqual(normalizeSettings(s).autoSites.new, [GEMINI_SITE]);
+    assert.deepEqual(s.autoSites, [GEMINI_SITE, "https://chat\\.test"], "not twice");
+    assert.equal(s.policies.new, "auto");
+    // the defaults are not changed with it
+    assert.deepEqual(DEFAULT_SETTINGS.autoSites, [GEMINI_SITE]);
   });
 
   it("Always allow keeps an Off tool off, and copes with names every object inherits", () => {
     const s = settings({ policies: { a: "off" } });
-    allowSite(s, "a", GEMINI);
+    allowSite(s, "a", "https://chat.test");
     assert.equal(s.policies.a, "off");
-    assert.equal(s.autoSites.a, undefined);
+    assert.deepEqual(s.autoSites, [GEMINI_SITE]);
     for (const name of ["toString", "constructor", "hasOwnProperty"]) {
       allowSite(s, name, GEMINI);
       assert.equal(s.policies[name], "auto");
-      assert.deepEqual(s.autoSites[name], [GEMINI_SITE]);
       assert.equal(policiesOn(normalizeSettings(s), GEMINI)[name], "auto");
     }
     allowSite(s, "__proto__", GEMINI);
-    assert.equal(Object.getPrototypeOf(s.autoSites), Object.prototype);
+    assert.equal(Object.getPrototypeOf(s.policies), Object.prototype);
   });
 });

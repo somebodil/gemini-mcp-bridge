@@ -43,6 +43,10 @@ h2 {
   font-size: 15px;
   margin: 24px 0 4px;
 }
+h3 {
+  font-size: 13px;
+  margin: 16px 0 4px;
+}
 p {
   margin: 4px 0 8px;
 }
@@ -141,12 +145,6 @@ textarea.sites {
 input.try {
   flex: 1;
   min-width: 14em;
-}
-.sites-row td {
-  padding-left: 16px;
-}
-tr.has-sites td {
-  border-bottom: none;
 }
 .checks div {
   word-break: break-word;

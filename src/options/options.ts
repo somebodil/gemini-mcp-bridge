@@ -26,10 +26,10 @@ let state: BridgeState | undefined;
 const app = document.getElementById("app") as HTMLElement;
 /** Repaints the status line of each server once the service worker answered. */
 const painters: (() => void)[] = [];
-/** Per tool: what is typed in its box of sites and not saved yet, and what its last check said. They outlive a
- * repaint of the table (a tool allowed on a chat page meanwhile). */
-const drafts = new Map<string, string>();
-const checks = new Map<string, { text: string; bad?: boolean }[]>();
+/** What is typed in the box of sites and not saved yet, and what its last check said. They outlive a repaint of
+ * the tools (a tool allowed on a chat page meanwhile). */
+let draft: string | undefined;
+let notes: { text: string; bad?: boolean }[] = [];
 const GEMINI = "https://gemini.google.com";
 let tryAddress = GEMINI;
 
@@ -154,27 +154,16 @@ function renderTools(): void {
       if ((own(settings.policies, tool.name) ?? "ask") === v) o.selected = true;
       select.append(o);
     }
-    select.addEventListener("change", () => {
-      // the box of sites shows only under an "Auto" tool; a tool that leaves Auto forgets its sites
-      drafts.delete(tool.name);
-      checks.delete(tool.name);
-      void update((s) => void (s.policies[tool.name] = select.value as Policy)).then(renderTools);
-    });
-    const auto = settings.policies[tool.name] === "auto";
-    const row = h("tr", auto ? { class: "has-sites" } : {}, h("td", { class: "mono" }, tool.name), h("td", {}, select), h("td", { class: "muted small" }, (tool.description ?? "").slice(0, 200)));
-    return auto ? [row, sitesRow(tool.name)] : [row];
+    // the sites show while a tool is "Auto"
+    select.addEventListener("change", () => void update((s) => void (s.policies[tool.name] = select.value as Policy)).then(renderTools));
+    return h("tr", {}, h("td", { class: "mono" }, tool.name), h("td", {}, select), h("td", { class: "muted small" }, (tool.description ?? "").slice(0, 200)));
   });
-  const anyAuto = rows.some((r) => r.length > 1);
-  const address = h("input", { type: "text", class: "try", value: tryAddress, "aria-label": t("optTryAddress"), placeholder: GEMINI, spellcheck: "false", "data-key": "try" });
-  address.addEventListener("input", () => (tryAddress = address.value));
+  const anyAuto = all.some((tool) => own(settings.policies, tool.name) === "auto");
   // the box being typed in is drawn anew: the focus and the caret go to the new one
   const was = document.activeElement;
   const key = was instanceof HTMLElement && box.contains(was) ? was.dataset.key : undefined;
   const caret = was instanceof HTMLTextAreaElement || was instanceof HTMLInputElement ? [was.selectionStart ?? 0, was.selectionEnd ?? 0] : [0, 0];
-  box.replaceChildren(
-    ...(anyAuto ? [h("p", { class: "muted small" }, t("optSitesHelp")), h("label", { class: "line small" }, t("optTryAddress"), address)] : []),
-    h("table", {}, h("tbody", {}, ...rows.flat())),
-  );
+  box.replaceChildren(h("table", {}, h("tbody", {}, ...rows)), ...(anyAuto ? sitesBox() : []));
   const now = key ? box.querySelector<HTMLTextAreaElement | HTMLInputElement>(`[data-key="${CSS.escape(key)}"]`) : null;
   if (now) {
     now.focus();
@@ -229,34 +218,45 @@ function checkSites(text: string): { ok: boolean; patterns: string[]; notes: { t
   return { ok: true, patterns: lines.map((l) => l.pattern), notes };
 }
 
-/** Under an "Auto" tool: its sites, one pattern per line, saved when the box is left if every line is right. */
-function sitesRow(tool: string): HTMLElement {
-  const box = h("textarea", { class: "sites", rows: "2", spellcheck: "false", "aria-label": t("optSitesOf", { tool }), placeholder: GEMINI_SITE, "data-key": `sites:${tool}` });
-  box.value = drafts.get(tool) ?? (own(settings.autoSites, tool) ?? []).join("\n");
+/** Under the tools while one is "Auto": their sites, one pattern per line, saved when the box is left if every line
+ * is right; and an address to try the patterns on. */
+function sitesBox(): HTMLElement[] {
+  const box = h("textarea", { class: "sites", rows: "3", spellcheck: "false", "aria-label": t("optSites"), placeholder: GEMINI_SITE, "data-key": "sites" });
+  box.value = draft ?? settings.autoSites.join("\n");
   const out = h("div", { class: "checks small", "aria-live": "polite" });
-  const show = () => out.replaceChildren(...(checks.get(tool) ?? []).map((n) => h("div", { class: n.bad ? "err" : "ok" }, n.text)));
+  const show = () => out.replaceChildren(...notes.map((n) => h("div", { class: n.bad ? "err" : "ok" }, n.text)));
   const check = () => {
     const got = checkSites(box.value);
-    checks.set(tool, got.notes);
+    notes = got.notes;
     show();
     return got;
   };
-  box.addEventListener("input", () => drafts.set(tool, box.value));
+  box.addEventListener("input", () => (draft = box.value));
   // on leaving the box, not on "change": a box drawn anew with what was typed has no change pending
   box.addEventListener("blur", () => {
-    if (!drafts.has(tool)) return;
+    const typed = draft;
+    if (typed === undefined) return;
     const got = check();
     if (!got.ok) return;
-    void update((s) => void (s.autoSites[tool] = got.patterns)).then(() => {
-      drafts.delete(tool);
-      checks.set(tool, [...got.notes, { text: t("optSitesSaved") }]);
+    void update((s) => void (s.autoSites = got.patterns)).then(() => {
+      // typed on meanwhile: that is not saved yet
+      if (draft === typed) draft = undefined;
+      notes = [...got.notes, { text: t("optSitesSaved") }];
       show();
     });
   });
   const test = h("button", {}, t("optCheck"));
   test.addEventListener("click", () => void check());
+  const address = h("input", { type: "text", class: "try", value: tryAddress, "aria-label": t("optTryAddress"), placeholder: GEMINI, spellcheck: "false", "data-key": "try" });
+  address.addEventListener("input", () => (tryAddress = address.value));
   show();
-  return h("tr", { class: "sites-row" }, h("td", { colspan: "3" }, h("div", { class: "line" }, box, test), out));
+  return [
+    h("h3", {}, t("optSites")),
+    h("p", { class: "muted small" }, t("optSitesHelp")),
+    h("div", { class: "line" }, box, test),
+    h("label", { class: "line small" }, t("optTryAddress"), address),
+    out,
+  ];
 }
 
 /** The learned pages: each site with when it was learned, what of it was found, and Delete. */

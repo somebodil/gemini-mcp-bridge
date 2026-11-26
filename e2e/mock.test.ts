@@ -160,7 +160,7 @@ describe("with a mock Gemini", () => {
       assert.match((await sent(page))[1], /exit code: 0\n--- stdout ---\nalways/);
       const s = await h.worker.evaluate(async () => (await chrome.storage.local.get("settings")).settings as Settings);
       assert.equal(s.policies.run_command, "auto");
-      assert.deepEqual(s.autoSites.run_command, ["https://gemini\\.google\\.com"]);
+      assert.deepEqual(s.autoSites, ["https://gemini\\.google\\.com"], "Gemini was in the list already");
     }));
 
   it("runs auto tools without asking, several calls in order", async () => {
@@ -359,10 +359,10 @@ describe("approval cannot be skipped", () => {
       assert.equal(off.ok, false);
       assert.match(off.text, /no tool named "run_command"/);
       // Auto on Gemini only: this page (the extension's own) is another site
-      await h.setSettings({ policies: { run_command: "auto" }, autoSites: { run_command: ["https://gemini\\.google\\.com"] } });
+      await h.setSettings({ policies: { run_command: "auto" }, autoSites: ["https://gemini\\.google\\.com"] });
       const elsewhere = await viaPort(false);
       assert.equal(elsewhere.needsApproval, true);
-      await h.setSettings({ policies: { run_command: "auto" }, autoSites: { run_command: [`chrome-extension://${id}`] } });
+      await h.setSettings({ policies: { run_command: "auto" }, autoSites: [`chrome-extension://${id}`] });
       assert.match((await viaPort(false)).text, /via-port/);
       h.calls.length = 0;
     } finally {
@@ -522,18 +522,20 @@ describe("options page", () => {
     }
   });
 
-  it("the sites of an Auto tool: Gemini's at first, checked line by line, saved only when every line is right", async () => {
+  it("the sites of the Auto tools: one list, Gemini's at first, checked line by line, saved only when every line is right", async () => {
     const id = new URL(h.worker.url()).host;
     const page = await h.context.newPage();
-    const stored = () => h.worker.evaluate(async () => ((await chrome.storage.local.get("settings")).settings as Settings).autoSites?.read_file);
+    const stored = () => h.worker.evaluate(async () => ((await chrome.storage.local.get("settings")).settings as Settings).autoSites);
+    const policy = (tool: string) => page.getByRole("combobox", { name: tool, exact: true });
     try {
       await page.goto(`chrome-extension://${id}/options.html`);
-      await page.getByRole("combobox", { name: "read_file" }).selectOption("auto");
-      const box = page.getByRole("textbox", { name: "Sites of read_file" });
+      await page.getByText("Connected · test-server · 4 tools").waitFor({ timeout: 10_000 });
+      const box = page.getByRole("textbox", { name: "Sites of the Auto tools" });
+      assert.equal(await box.count(), 0, "no box while no tool is Auto");
+      await policy("read_file").selectOption("auto");
       assert.equal(await box.inputValue(), "https://gemini\\.google\\.com");
-      const row = page.locator(".sites-row").filter({ has: box });
-      const check = row.getByRole("button", { name: "Check", exact: true });
-      const checks = row.locator(".checks");
+      const check = page.getByRole("button", { name: "Check", exact: true });
+      const checks = page.locator(".checks");
       await check.click();
       await checks.getByText("The syntax is right (lines: 1).").waitFor();
       await checks.getByText("https://gemini.google.com: matches line 1.").waitFor();
@@ -550,7 +552,7 @@ describe("options page", () => {
       await address.fill("chat.example.test/c/123");
       await box.fill("chat\\.example\\.test");
       await check.click();
-      await checks.getByText("https://chat.example.test: no line matches, so the tool is asked about there.").waitFor();
+      await checks.getByText("https://chat.example.test: no line matches, so the Auto tools are asked about there.").waitFor();
       await checks.getByText("Line 1 matches chat.example.test but not https://chat.example.test").waitFor();
 
       // dots written as they are: they match any character
@@ -563,17 +565,25 @@ describe("options page", () => {
       await box.press("Tab");
       await checks.getByText("https://chat.example.test: matches line 2.").waitFor();
       await page.waitForFunction(() => document.getElementById("saved")?.textContent === "Saved");
-      assert.deepEqual(await stored(), ["https://gemini\\.google\\.com", "https://(chat|www)\\.example\\.test"]);
+      const two = ["https://gemini\\.google\\.com", "https://(chat|www)\\.example\\.test"];
+      assert.deepEqual(await stored(), two);
 
-      // what is typed and not saved stays when the table is repainted (a tool allowed on a chat page meanwhile)
+      // another Auto tool has the same list, and one leaving Auto does not take it away
+      await policy("list_directory").selectOption("auto");
+      await policy("read_file").selectOption("ask");
+      await page.waitForFunction(() => document.getElementById("saved")?.textContent === "Saved");
+      assert.equal(await box.inputValue(), two.join("\n"));
+      assert.deepEqual(await stored(), two);
+
+      // what is typed and not saved stays when the tools are repainted (a tool allowed on a chat page meanwhile)
       await box.fill(".*\nhttps://(");
       await h.worker.evaluate(async () => {
         const all = await chrome.storage.local.get("settings");
         const s = all.settings as Settings;
-        s.policies.list_directory = "auto";
+        s.policies.write_file = "auto";
         await chrome.storage.local.set({ settings: s });
       });
-      await page.getByRole("textbox", { name: "Sites of list_directory" }).waitFor();
+      await page.waitForFunction(() => document.querySelector<HTMLSelectElement>('select[aria-label="write_file"]')?.value === "auto");
       assert.equal(await box.inputValue(), ".*\nhttps://(");
       await box.fill(".*");
       await check.click();
@@ -582,8 +592,14 @@ describe("options page", () => {
       // no line: asked about everywhere
       await box.fill("");
       await box.press("Tab");
-      await checks.getByText("No site: the tool is asked about everywhere.").waitFor();
+      await checks.getByText("No site: the Auto tools are asked about everywhere.").waitFor();
       await page.waitForFunction(() => document.getElementById("saved")?.textContent === "Saved");
+      assert.deepEqual(await stored(), []);
+
+      // no tool Auto: the box goes, the list stays
+      await policy("list_directory").selectOption("ask");
+      await policy("write_file").selectOption("ask");
+      await box.waitFor({ state: "detached" });
       assert.deepEqual(await stored(), []);
     } finally {
       await page.close();

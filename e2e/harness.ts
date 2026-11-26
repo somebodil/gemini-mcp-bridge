@@ -15,7 +15,7 @@ export const TOKEN = "e2e-token-0123456789abcdef";
 /** Settings where these tools run without asking, on every site. */
 export const auto = (...tools: string[]): Partial<Settings> => ({
   policies: Object.fromEntries(tools.map((t) => [t, "auto"])),
-  autoSites: Object.fromEntries(tools.map((t) => [t, [".*"]])),
+  autoSites: [".*"],
 });
 
 export interface Harness {
