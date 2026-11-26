@@ -92,6 +92,9 @@ describe("learning a page", () => {
 
       const l = await stored();
       assert.ok(l, "a layout for the site");
+      // the reply said which AI answers here
+      assert.equal(l.ai, "claude");
+      assert.match((await box(page).textContent()) ?? "", /The AI here says it is Claude\./);
       assert.equal(await where(page, l.input), "textarea");
       assert.equal(await where(page, l.send), "closed icon-button");
       assert.match(await where(page, l.busy?.at), /icon-button/);
@@ -115,7 +118,49 @@ describe("learning a page", () => {
       assert.equal(await page.locator("gmb-overlay").count(), 0);
       assert.equal(await box(page).count(), 0);
       await page.locator("gmb-status .pill").click();
-      await page.locator('gmb-status [data-site="learned"]').waitFor();
+      await page.locator('gmb-status [data-site="learned"][data-ai="claude"]').filter({ hasText: "The AI here: Claude." }).waitFor();
+    } finally {
+      await page.close();
+    }
+  });
+
+  it("tells the AI it learned its own folder; learned again as another AI, the next message tells the new one", async () => {
+    const page = await open();
+    const sent = () => page.evaluate(() => (window as unknown as { __sent: string[] }).__sent);
+    const say = async (text: string, n: number) => {
+      await page.locator("chat-app textarea").fill(text);
+      await page.locator("chat-app textarea").press("Enter");
+      await page.waitForFunction((k) => (window as unknown as { __sent: string[] }).__sent.length === k, n);
+      // the reply is written out (the instructions reached the conversation), and the page sends again: till then
+      // its send button stops the reply
+      await page.waitForFunction(
+        (k) =>
+          (document.querySelector("chat-app")?.shadowRoot?.textContent?.split("Nothing more to say.").length ?? 0) > k &&
+          !(document.querySelector("chat-app") as unknown as { generating: boolean }).generating,
+        n / 2,
+      );
+    };
+    try {
+      await learn(page);
+      await closeResults(page);
+      await say("hello", 2);
+      const first = (await sent())[1];
+      assert.ok(first.startsWith(MARK.instructions), first.slice(0, 80));
+      assert.match(first, /Your own folder on my computer is ~\/\.claude: your standing instructions are in ~\/\.claude\/CLAUDE\.md, your skills in ~\/\.claude\/skills /);
+
+      await page.evaluate(() => Object.assign(window, { __ai: "ChatGPT" }));
+      await page.locator("gmb-status .pill").click();
+      await button(page, "Learn again").click();
+      await sendTest(page);
+      await button(page, "Stop learning").click();
+      await box(page).filter({ hasText: "The AI here says it is ChatGPT." }).waitFor();
+      assert.equal((await stored())?.ai, "chatgpt");
+      await closeResults(page);
+      await say("next", 4);
+      const update = (await sent())[3];
+      assert.ok(update.startsWith(MARK.toolsUpdate), update.slice(0, 80));
+      assert.match(update, /~\/\.codex\/AGENTS\.md/);
+      assert.doesNotMatch(update, /\.claude/);
     } finally {
       await page.close();
     }
@@ -219,7 +264,7 @@ describe("learned pages on the options page", () => {
       const row = (site: string) => options.locator(`#layouts tr[data-site="${site}"]`);
       // the site learned just now is there, though the page was opened before
       await row(SITE).waitFor();
-      assert.match((await row(SITE).textContent()) ?? "", /7 of 7 parts/);
+      assert.match((await row(SITE).textContent()) ?? "", /AI: Claude · 7 of 7 parts/);
       const about = (await row("https://other.example.test").textContent()) ?? "";
       assert.match(about, /5 of 7 parts/);
       assert.match(about, /not found: Writing indicator, Code block/);

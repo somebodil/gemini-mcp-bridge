@@ -5,11 +5,14 @@
 //    one that holds both are the message and the reply, and the scrolling element around them is the list,
 //  - the buttons near the input box are looked at every few tenths of a second: the one that looked different
 //    from just after the message went out until the reply was finished is the writing indicator (most often the
-//    send button turned into a stop button), and the button the user clicked to send is the send button.
+//    send button turned into a stop button), and the button the user clicked to send is the send button,
+//  - the "ai" the reply filled in is which AI answers on the page: the instructions tell it its own folder.
+// Every chat page is learned so, gemini.google.com too: there only the AI is used, the extension knows the page.
 // The user stops the learning; what it found is kept for the site (layout.ts) and shown on the page.
 
 import { t } from "../shared/i18n.ts";
 import {
+  aiNamed,
   busyNow,
   contains,
   deepText,
@@ -175,7 +178,8 @@ export class Learner {
     this.onChange = onChange;
     const rnd = crypto.getRandomValues(new Uint32Array(2));
     this.nonce = `q${rnd[0].toString(36)}${rnd[1].toString(36)}`.slice(0, 10);
-    const json = `{"gmb_test": "${this.nonce}"}`;
+    // the reply fills in "ai": which AI answers on this page
+    const json = `{"gmb_test": "${this.nonce}", "ai": ""}`;
     this.message = t("learnMessage", { json });
     this.head = letters(this.message).slice(0, 20);
     this.json = letters(json);
@@ -565,6 +569,9 @@ export class Learner {
         if (codeP) layout.code = codeP;
         add("code", codeP ? (p.codeSure ? "ok" : "unsure") : "missing", code);
       } else add("code", "missing", null, t("noteNoCode"));
+      // which AI answered: the "ai" it filled in
+      const ai = aiNamed(/"ai"\s*:\s*"([^"]*)"/.exec(deepText(p.code ?? p.reply))?.[1]);
+      if (ai) layout.ai = ai;
     } else {
       for (const role of ["list", "mine", "reply", "code"] as const) add(role, "missing", null, t("noteNotSeen"));
     }

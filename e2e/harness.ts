@@ -36,7 +36,7 @@ export interface Harness {
 
 export async function startHarness(opts: { headless?: boolean; locale?: string; serverName?: string } = {}): Promise<Harness> {
   const dir = mkdtempSync(join(tmpdir(), "gmb-e2e-"));
-  const server = await startTestServer({ token: TOKEN, name: opts.serverName });
+  const server = await startTestServer({ token: TOKEN, name: opts.serverName, home: dir });
   const url = server.url;
   const profile = mkdtempSync(join(tmpdir(), "gmb-profile-"));
   const context = await chromium.launchPersistentContext(profile, {

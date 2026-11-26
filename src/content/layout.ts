@@ -13,7 +13,7 @@ import { LAYOUTS_KEY, loadLayouts, storeLayout, type Layout, type Locator, type 
 import { problem, problemOnce } from "../shared/report.ts";
 import { deepElements, isOurs, nameOf, parentOf, shadowOf, treesUnder } from "./page.ts";
 
-export { ROLES, type Layout, type Locator, type Pattern, type Role } from "../shared/layouts.ts";
+export { aiNamed, ROLES, type Ai, type Layout, type Locator, type Pattern, type Role } from "../shared/layouts.ts";
 
 // ---------------------------------------------------------------------------------------------------------
 // What stays the same

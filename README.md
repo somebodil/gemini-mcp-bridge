@@ -51,7 +51,7 @@ npx local-mcp-bridge-server
 The first start makes a config file with a random token and prints what the extension needs:
 
 ```
-local-mcp-bridge-server 0.7.0
+local-mcp-bridge-server 0.8.1
   URL:    http://127.0.0.1:7341/mcp
   Token:  3q2-...
   Config: /home/you/.config/local-mcp-bridge-server/config.json (new)
@@ -93,18 +93,34 @@ Open [Gemini](https://gemini.google.com/app) and click the extension's icon: **O
 
 ![A call waiting for Run](store/images/screenshot-1-ask.png)
 
+### Its own folder: learn the page once
+
+The extension can tell the AI of a chat page where its own folder on your computer is, the one its agent on the command line uses:
+
+| AI | Folder | Instructions | Skills |
+|---|---|---|---|
+| Gemini | `~/.gemini` | `~/.gemini/GEMINI.md` | `~/.gemini/skills` |
+| ChatGPT | `~/.codex` | `~/.codex/AGENTS.md` | `~/.codex/skills` |
+| Claude | `~/.claude` | `~/.claude/CLAUDE.md` | `~/.claude/skills` |
+
+Which AI answers on a page, the AI says itself, once per site: click the corner button, then **Learn this page** (on gemini.google.com too), click the input box and send the test message that goes in. Its reply names the AI. The steps are the same on every page: see [Learn the page](#other-chat-pages-gemini-enterprise-and-others) below.
+
+From then on, the instructions of each new conversation there carry one more line, for example: *Your own folder on my computer is ~/.gemini: your standing instructions are in ~/.gemini/GEMINI.md, your skills in ~/.gemini/skills (a folder for each skill, whose SKILL.md says when and how to use it). A project's folder can have its own GEMINI.md.* A conversation already going gets it with your next message. The AI reads those files with the tools when it needs them, like any other file: with your **Run**, or by itself if you set the tool to *Auto*.
+
+The corner button's panel and the options page show the AI of each learned site. A site not learned, or an AI other than these three, gets no such line.
+
 ### Other chat pages (Gemini Enterprise and others)
 
 On a page other than gemini.google.com, for example Gemini Enterprise (`vertexaisearch.cloud.google.com`), the extension runs in **generic mode**. It does not know the page: it learns it from one test message, or it guesses.
 
 **Learn the page** (once per site). Click the corner button, then **Learn this page**:
 
-1. Click the input box: a test message goes in. It asks for one short JSON code block back.
+1. Click the input box: a test message goes in. It asks for one short JSON code block back, with the name of the AI that answers.
 2. Send it, with the send button or Enter (Ctrl+Enter on a page that sends that way: the extension then leaves Enter alone there and sends with Ctrl+Enter too). Meanwhile the extension only watches: nothing goes along with the message, and no tool runs.
 3. A list of steps fills in as the extension sees each part: the input box, the send button, what shows that the page is writing (most often a stop button), your message, the reply, and the code block in it. When everything was seen, press **Stop learning**.
 4. The extension lists what it learned and outlines each part on the page: ✓ sure, ? a guess, ✗ not found. If a part is wrong, press **Pick** beside it and click the right element on the page: ↑ goes one layer out, ↓ back in, ← and → go to the element before and after it in the same layer, Enter picks, Esc cancels. The **?** beside it shows a table of what to pick for each part. Or press **Learn again**.
 
-What it learned is kept for the site (its address without the path) and used in every tab of it. The options page lists the learned sites; delete one to go back to guessing there.
+What it learned is kept for the site (its address without the path) and used in every tab of it. The options page lists the learned sites; delete one to go back to guessing there. On gemini.google.com, whose page the extension knows, the same learning only tells it which AI answers.
 
 **Not learned,** the extension guesses: the input box is the box you type in, the send and stop buttons are found by their names (*Send*, *Submit*, *Stop*, *보내기*, *중지*), and a tool call is a code block that appears after your message went out (also inside web components).
 
@@ -170,7 +186,7 @@ Read this before you allow a tool to run by itself.
     - Send the results by itself, or leave them in the input box.
     - How many characters of output go into one message (20,000 by default).
     - The time limit of a call.
-- **Learned pages:** the chat pages learned in generic mode, each with when it was learned and which parts were found or picked by hand. Delete one to go back to guessing on it.
+- **Learned pages:** the chat pages learned, each with when it was learned, which AI answers there, and which parts were found or picked by hand. Delete one to go back to guessing on it, and to forget its AI.
 - **Performance log** (off by default): to find out why a page is slow. In the tabs where the extension is on, it writes down
     - each click or key that took 100 ms or more to show its effect (what Chrome's *Interaction to Next Paint* measures), each frame of 150 ms or more, and how much of that time was the extension's own work;
     - every minute, how much time the extension took and in which of its functions.

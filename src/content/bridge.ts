@@ -6,7 +6,7 @@
 
 import type { BridgeState, CallReply, ExposedTool, Request } from "../shared/config.ts";
 import { t } from "../shared/i18n.ts";
-import { buildInstructions, buildToolsUpdate, formatResults, toolsHash, type Outcome, type ParsedCall } from "../shared/protocol.ts";
+import { aiHomeNote, buildInstructions, buildToolsUpdate, formatResults, toolsHash, type Outcome, type ParsedCall } from "../shared/protocol.ts";
 import { failed, problem, problemOnce } from "../shared/report.ts";
 import { noSuchTool } from "../shared/tools.ts";
 import { layoutChange, letters, loadLayout, saveLayout, type Layout, type Role } from "./layout.ts";
@@ -59,7 +59,7 @@ export function startBridge(page: Page): () => void {
   let lastAddress = page.address();
   /** Hash of the instructions this tab last sent. */
   let lastGiven: string | undefined;
-  /** What the extension learned about this site (pages other than gemini.google.com). */
+  /** What the extension learned about this site: which AI answers there, and on a page it does not know, its parts. */
   let layout: Layout | null = null;
   /** While the user teaches the page: the extension only watches. */
   let learner: Learner | null = null;
@@ -321,10 +321,13 @@ export function startBridge(page: Page): () => void {
         const parts: string[] = [];
         const cur = state;
         if (cur && cur.enabled && cur.tools.length) {
-          const hash = toolsHash(cur.tools, cur.notes);
+          // the AI learned for this site gets its own folder told, with what the servers say about the computer
+          const home = aiHomeNote(layout?.ai);
+          const notes = home ? [...cur.notes, home] : cur.notes;
+          const hash = toolsHash(cur.tools, notes);
           const had = await givenHash();
           if (had !== hash) {
-            parts.push(had === null ? buildInstructions(cur.tools, cur.notes) : buildToolsUpdate(cur.tools, cur.notes));
+            parts.push(had === null ? buildInstructions(cur.tools, notes) : buildToolsUpdate(cur.tools, notes));
             along.push(had === null ? "instructions" : "update");
             given = hash;
           }
@@ -686,10 +689,10 @@ export function startBridge(page: Page): () => void {
   }
 
   // -------------------------------------------------------------------------------------------------------
-  // Learning the page (generic mode)
+  // Learning the page
 
   function startLearning(): void {
-    if (page.kind !== "generic" || stopped) return;
+    if (stopped) return;
     stopPicking();
     results = null;
     overlay.hide();
@@ -728,7 +731,7 @@ export function startBridge(page: Page): () => void {
   }
 
   function startPicking(role: Role): void {
-    if (page.kind !== "generic" || stopped) return;
+    if (stopped) return;
     picker?.close();
     picking = { role, current: "" };
     picker = new Picker(
@@ -777,6 +780,8 @@ export function startBridge(page: Page): () => void {
     return {
       kind: "results",
       saved: results.saved,
+      // what the kept layout says, once one is kept
+      ai: results.saved ? (layout?.ai ?? null) : undefined,
       message: results.message,
       roles: results.roles.map((r) => ({ role: r.role, found: r.found, detail: short(r.el), note: r.note })),
     };
@@ -795,7 +800,7 @@ export function startBridge(page: Page): () => void {
       state,
       chatOn: chatOn(),
       notice,
-      site: page.kind === "generic" ? { learned: layout?.at ?? null } : null,
+      site: { learned: layout?.at ?? null, ai: layout?.ai ?? null },
       learn: learnBox(),
       flow: flowNow,
       avoid: () => inputAreaRects(learner?.inputArea() ?? page.inputArea()),
@@ -812,7 +817,7 @@ export function startBridge(page: Page): () => void {
     // the service worker reconnects changed servers by itself: no need to list every server again
     if (changes.settings) void refreshState(false);
     // learned in another tab of the site, or forgotten on the options page
-    const l = page.kind === "generic" ? layoutChange(changes) : undefined;
+    const l = layoutChange(changes);
     if (l !== undefined) {
       setLayout(l);
       render();
@@ -858,11 +863,10 @@ export function startBridge(page: Page): () => void {
   document.addEventListener("visibilitychange", onVisible);
   const timer = setInterval(timed("tick", tick), TICK_MS);
   void refreshState();
-  if (page.kind === "generic")
-    void loadLayout().then((l) => {
-      setLayout(l);
-      render();
-    });
+  void loadLayout().then((l) => {
+    setLayout(l);
+    render();
+  });
   render();
   dbg("started", page.kind);
   return stop;

@@ -12,6 +12,19 @@ export type Locator = string[];
 /** Elements of one kind: a selector each of them matches, looked for through shadow roots. */
 export type Pattern = string;
 
+/** Which AI answers on a site, as it said itself in its reply to the test message. */
+export type Ai = "claude" | "chatgpt" | "gemini" | "other";
+
+/** The AI a reply named: the three by their names or makers, any other name "other"; undefined when it named none. */
+export function aiNamed(said: string | undefined): Ai | undefined {
+  const s = (said ?? "").trim().toLowerCase();
+  if (!s) return undefined;
+  if (/claude|anthropic/.test(s)) return "claude";
+  if (/gpt|openai|codex/.test(s)) return "chatgpt";
+  if (/gemini|google/.test(s)) return "gemini";
+  return "other";
+}
+
 export interface Layout {
   v: 1;
   /** When it was learned (or last changed by hand). */
@@ -31,6 +44,8 @@ export interface Layout {
   code?: Pattern;
   /** Roles the user picked by hand. */
   picked?: Role[];
+  /** Which AI answers here: the instructions tell it its own folder on the user's computer. */
+  ai?: Ai;
 }
 
 export const LAYOUTS_KEY = "layouts";

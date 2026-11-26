@@ -4,9 +4,9 @@
 
 import type { BridgeState } from "../shared/config.ts";
 import { h, onTrustedClick, SHADOW_MODE } from "../shared/dom.ts";
-import { t } from "../shared/i18n.ts";
+import { aiName, t } from "../shared/i18n.ts";
 import { argumentsText, type ParsedCall, type ParseProblem } from "../shared/protocol.ts";
-import { ROLES, type Role } from "./layout.ts";
+import { ROLES, type Ai, type Role } from "./layout.ts";
 import type { Found, LearnView } from "./learn.ts";
 import { ROLE_COLOR, roleName } from "./overlay.ts";
 
@@ -234,7 +234,8 @@ export interface FlowView {
 /** The learning of the page as it goes, or what it learned. */
 export type LearnBox =
   | { kind: "learning"; view: LearnView }
-  | { kind: "results"; roles: { role: Role; found: Found; detail: string; note?: string }[]; saved: boolean; message?: string }
+  /** `ai`: which AI the kept layout says answers here (null: it did not say); undefined when nothing is kept. */
+  | { kind: "results"; roles: { role: Role; found: Found; detail: string; note?: string }[]; saved: boolean; ai?: Ai | null; message?: string }
   | { kind: "picking"; role: Role; current: string };
 
 export interface PillHandlers {
@@ -320,8 +321,8 @@ interface PillView {
   state: BridgeState | null;
   chatOn: boolean;
   notice: Notice | null;
-  /** On a page other than gemini.google.com: when the extension learned this site, null when it did not. */
-  site: { learned: number | null } | null;
+  /** When the extension learned this site (null: not yet), and which AI answers here (null: not known). */
+  site: { learned: number | null; ai: Ai | null };
   learn: LearnBox | null;
   flow: FlowView | null;
   /** Where the page's input box and send button are: the learning box moves away from them. */
@@ -334,7 +335,7 @@ export class Pill {
   readonly host: HTMLElement;
   private readonly root: ShadowRoot;
   private open = false;
-  private last: PillView = { state: null, chatOn: true, notice: null, site: null, learn: null, flow: null };
+  private last: PillView = { state: null, chatOn: true, notice: null, site: { learned: null, ai: null }, learn: null, flow: null };
   private readonly handlers: PillHandlers;
   /** The button was dragged: the click that ends the drag does not open the panel. */
   private dragged = false;
@@ -577,6 +578,7 @@ export class Pill {
       );
     }
     el.append(h("div", { class: "title" }, t("resultsTitle")), roles);
+    if (box.ai !== undefined) el.append(h("div", { class: "small", "data-ai": box.ai ?? "" }, box.ai ? t("resultsAi", { ai: aiName(box.ai) }) : t("resultsAiMissing")));
     if (box.message) el.append(h("div", { class: "small warn" }, box.message));
     el.append(h("div", { class: "small muted" }, box.saved ? t("resultsHint") : t("resultsNothing")));
     el.append(h("div", { class: "buttons" }, this.button(t("learnAgain"), () => this.handlers.onLearnStart()), this.button(t("learnClose"), () => this.handlers.onCloseResults(), true)));
@@ -610,21 +612,20 @@ export class Pill {
       if (!state.servers.some((s) => s.status === "ok")) panel.append(h("div", { class: "small muted" }, t("noServer")));
     }
     if (this.handlers.generic) panel.append(h("div", { class: "small muted" }, t("genericPage")));
-    if (site) {
-      const learned = site.learned;
-      panel.append(h("div", { class: "small", "data-site": learned ? "learned" : "guessing" }, learned ? t("siteLearned", { date: new Date(learned).toLocaleString() }) : t("siteNotLearned")));
-      const start = () => {
-        this.open = false;
-        this.handlers.onLearnStart();
-      };
-      const show = () => {
-        this.open = false;
-        this.handlers.onShowLearned();
-      };
-      panel.append(
-        h("div", { class: "buttons" }, ...(learned ? [this.button(t("learnShow"), show), this.button(t("learnAgain"), start)] : [this.button(t("learnStart"), start, true)])),
-      );
-    }
+    const { learned, ai } = site;
+    const about = learned
+      ? `${t("siteLearned", { date: new Date(learned).toLocaleString() })} ${ai ? t("siteAi", { ai: aiName(ai) }) : t("siteAiUnknown")}`
+      : t(this.handlers.generic ? "siteNotLearned" : "siteNotLearnedKnown");
+    panel.append(h("div", { class: "small", "data-site": learned ? "learned" : "guessing", "data-ai": ai ?? "" }, about));
+    const start = () => {
+      this.open = false;
+      this.handlers.onLearnStart();
+    };
+    const show = () => {
+      this.open = false;
+      this.handlers.onShowLearned();
+    };
+    panel.append(h("div", { class: "buttons" }, ...(learned ? [this.button(t("learnShow"), show), this.button(t("learnAgain"), start)] : [this.button(t("learnStart"), start, true)])));
     const refresh = h("button", {}, t("refresh"));
     onTrustedClick(refresh, () => this.handlers.onRefresh());
     const settings = h("button", {}, t("settings"));

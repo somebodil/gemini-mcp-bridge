@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  aiHomeNote,
   argumentsText,
   buildInstructions,
   buildToolsUpdate,
@@ -64,6 +65,19 @@ describe("instructions", () => {
   it("hashes the tool list stably", () => {
     assert.equal(toolsHash([readFile]), toolsHash([readFile]));
     assert.notEqual(toolsHash([readFile]), toolsHash([readFile], ["note"]));
+  });
+  it("tells the AI of the site its own folder, its instructions file and its skills, and nothing to another AI", () => {
+    assert.equal(
+      aiHomeNote("gemini"),
+      "Your own folder on my computer is ~/.gemini: your standing instructions are in ~/.gemini/GEMINI.md, your skills in ~/.gemini/skills " +
+        "(a folder for each skill, whose SKILL.md says when and how to use it). A project's folder can have its own GEMINI.md.",
+    );
+    assert.match(aiHomeNote("claude") ?? "", /~\/\.claude: .* ~\/\.claude\/CLAUDE\.md, .* ~\/\.claude\/skills .* its own CLAUDE\.md\.$/);
+    assert.match(aiHomeNote("chatgpt") ?? "", /~\/\.codex: .* ~\/\.codex\/AGENTS\.md, .* ~\/\.codex\/skills .* its own AGENTS\.md\.$/);
+    assert.equal(aiHomeNote("other"), null);
+    assert.equal(aiHomeNote(undefined), null);
+    // it goes with the notes of the servers: under "About my computer and the tools"
+    assert.match(buildInstructions([readFile], ["Home folder: /Users/me.", aiHomeNote("gemini") ?? ""]), /About my computer and the tools:\n {2}Home folder: \/Users\/me\.\n {2}Your own folder on my computer is ~\/\.gemini/);
   });
 });
 

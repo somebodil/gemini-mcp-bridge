@@ -30,7 +30,7 @@ after(async () => {
 beforeEach(async () => {
   await h.setSettings({});
   // every mock chat gets the same address: what one test sent must not count for the next
-  await h.worker.evaluate(() => chrome.storage.local.remove("given"));
+  await h.worker.evaluate(() => chrome.storage.local.remove(["given", "layouts"]));
   h.calls.length = 0;
 });
 
@@ -541,6 +541,42 @@ describe("rounds and sends", () => {
       const s = await sent(m.page);
       assert.equal(s.length, 1);
       assert.equal(s[0].split(MARK.instructions).length - 1, 1);
+    }));
+});
+
+describe("learning gemini.google.com", () => {
+  it("is learned like any page: the AI says it is Gemini, and the next instructions tell it its own folder", () =>
+    withMock(["Nothing more to say."], async (m) => {
+      const { page } = m;
+      const learnBox = page.locator("gmb-status .learn");
+      await page.locator("gmb-status .pill").click();
+      // not learned: the AI is not known, and no folder is told
+      await page.locator("gmb-status [data-site]").filter({ hasText: "does not know which AI answers here" }).waitFor();
+      await page.locator("gmb-status button", { hasText: "Learn this page" }).click();
+      await page.locator("rich-textarea .ql-editor").click();
+      await page.waitForFunction(() => document.querySelector<HTMLElement>("rich-textarea .ql-editor")?.innerText.includes("gmb_test"));
+      await page.locator(".send-button button").click();
+      await learnBox.filter({ hasText: "Everything seen" }).waitFor({ timeout: 20_000 });
+      await page.locator("gmb-status button", { hasText: "Stop learning" }).click();
+      await learnBox.filter({ hasText: "The AI here says it is Gemini." }).waitFor();
+      const layouts = await h.worker.evaluate(async () => (await chrome.storage.local.get("layouts")).layouts as Record<string, { ai?: string }>);
+      assert.equal(layouts["https://gemini.google.com"]?.ai, "gemini");
+      await page.locator("gmb-status button", { hasText: "Close" }).click();
+      // the test message went as it was
+      const [test] = await sent(page);
+      assert.match(test, /^This is a test from the Gemini MCP Bridge extension/);
+      assert.ok(!test.includes(MARK.instructions));
+      await say(page, "What is in my folder?");
+      await waitSent(page, 2);
+      const second = (await sent(page))[1];
+      assert.ok(second.startsWith(MARK.instructions), second.slice(0, 80));
+      assert.match(second, /Your own folder on my computer is ~\/\.gemini: your standing instructions are in ~\/\.gemini\/GEMINI\.md, your skills in ~\/\.gemini\/skills /);
+      assert.ok(second.endsWith("What is in my folder?"));
+      // the mock shows nothing near the input box while it writes: the learning says so, and nothing else went wrong
+      assert.deepEqual(
+        m.errors.filter((e) => !e.includes("Learning did not find: busy")),
+        [],
+      );
     }));
 });
 

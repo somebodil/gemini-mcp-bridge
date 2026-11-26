@@ -17,7 +17,7 @@ import {
   type Settings,
 } from "../shared/config.ts";
 import { h } from "../shared/dom.ts";
-import { t, type Key } from "../shared/i18n.ts";
+import { aiName, t, type Key } from "../shared/i18n.ts";
 import { LAYOUTS_KEY, loadLayouts, ROLES, storeLayout, type Role } from "../shared/layouts.ts";
 import { failed, problem } from "../shared/report.ts";
 import { allowedOn, GEMINI_SITE, originOf, own, readSites } from "../shared/sites.ts";
@@ -270,7 +270,7 @@ function sitesBox(): HTMLElement[] {
   ];
 }
 
-/** The learned pages: each site with when it was learned, what of it was found, and Delete. */
+/** The learned pages: each site with when it was learned, which AI answers there, what of it was found, and Delete. */
 async function renderLayouts(): Promise<void> {
   const box = document.getElementById("layouts");
   if (!box) return;
@@ -283,7 +283,9 @@ async function renderLayouts(): Promise<void> {
   const rows = all.map(([site, l]) => {
     const found = ROLES.filter((r) => l[r] !== undefined);
     const missing = ROLES.filter((r) => !found.includes(r));
-    const about = [t("optLearnedAt", { date: new Date(l.at).toLocaleString() }), t("optParts", { n: found.length, all: ROLES.length })];
+    const about = [t("optLearnedAt", { date: new Date(l.at).toLocaleString() })];
+    if (l.ai) about.push(t("optAi", { ai: aiName(l.ai) }));
+    about.push(t("optParts", { n: found.length, all: ROLES.length }));
     if (missing.length) about.push(t("optMissing", { names: names(missing) }));
     if (l.picked?.length) about.push(t("optPickedParts", { names: names(l.picked) }));
     const del = h("button", {}, t("optDelete"));

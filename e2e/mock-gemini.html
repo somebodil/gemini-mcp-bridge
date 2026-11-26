@@ -47,7 +47,9 @@
         addQuery(text);
         if (!/\/app\/[0-9a-f]{8,}/.test(location.pathname)) history.pushState({}, "", "/app/0123456789abcdef");
         sb.classList.replace("submit", "stop");
-        const reply = window.__replies.shift() ?? "Nothing more to say.";
+        // the extension's test message (learning the page) gets the code block it asks for, as Gemini
+        const test = text.match(/"gmb_test":\s*"([^"]+)"/);
+        const reply = test ? `\`\`\`json\n{"gmb_test": "${test[1]}", "ai": "gemini"}\n\`\`\`` : (window.__replies.shift() ?? "Nothing more to say.");
         const chatNow = window.__chatGen;
         const finish = () => {
           if (!sb.classList.contains("stop")) return;

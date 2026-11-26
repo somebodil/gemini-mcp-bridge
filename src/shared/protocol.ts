@@ -5,6 +5,8 @@
 // {"mcp_call": {...}}, and the extension sends the results back as the next message. Everything here is pure
 // so that it can be tested without a browser.
 
+import type { Ai } from "./layouts.ts";
+
 export const MARK = {
   instructions: "[MCP Bridge · tool instructions",
   instructionsEnd: "[End of MCP Bridge instructions]",
@@ -95,6 +97,23 @@ export function buildToolsUpdate(tools: ToolInfo[], notes: string[] = []): strin
     ...toolSection(tools, notes),
     MARK.instructionsEnd,
   ].join("\n");
+}
+
+/** Where each AI keeps its own instructions and skills, as its agent on the command line does: folder, instructions file. */
+const AI_HOMES: Record<Exclude<Ai, "other">, [string, string]> = {
+  claude: [".claude", "CLAUDE.md"],
+  chatgpt: [".codex", "AGENTS.md"],
+  gemini: [".gemini", "GEMINI.md"],
+};
+
+/** The note that tells the AI of the site its own folder on the user's computer; null when it is not one of the three. */
+export function aiHomeNote(ai: Ai | undefined): string | null {
+  if (!ai || ai === "other") return null;
+  const [dir, file] = AI_HOMES[ai];
+  return (
+    `Your own folder on my computer is ~/${dir}: your standing instructions are in ~/${dir}/${file}, your skills in ~/${dir}/skills ` +
+    `(a folder for each skill, whose SKILL.md says when and how to use it). A project's folder can have its own ${file}.`
+  );
 }
 
 /** One exchange, request to answer, with a tool that exists: models follow a protocol they were shown. */

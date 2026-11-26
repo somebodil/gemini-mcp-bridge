@@ -3,7 +3,7 @@
 
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
-import { writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
 import type { Page } from "playwright";
@@ -207,6 +207,7 @@ describe("real Gemini as an unknown page, learned first", { skip: !live && "set 
     for (const role of ["input", "send", "mine", "reply", "code"]) {
       assert.ok(roles.some((r) => r.startsWith(`${role}=ok`) || r.startsWith(`${role}=unsure`)), `${role} learned: ${roles.join(" | ")}`);
     }
+    assert.equal((layouts["https://gemini.google.com"] as { ai?: string } | undefined)?.ai, "gemini", "the reply said it is Gemini");
     await page.locator("gmb-status button", { hasText: "Close" }).click();
 
     // operating with what was learned
@@ -227,5 +228,60 @@ describe("real Gemini as an unknown page, learned first", { skip: !live && "set 
     assert.ok(logs.some((l) => /reply finished \d+ learned/.test(l)), "replies were found by what was learned");
     const cards = await page.locator("gmb-card").evaluateAll((els) => els.map((e) => e.shadowRoot?.textContent ?? ""));
     assert.ok(cards.length >= 1 && cards.every((c) => c.includes("Done")), `cards: ${cards.join(" | ")}`);
+  });
+});
+
+// gemini.google.com is learned like any page: Gemini says which AI it is, and the instructions then tell it its own
+// folder. It finds its skill there: a folder made for the test in the test server's home (~ of its file tools).
+describe("real Gemini, learned: its own folder", { skip: !live && "set GMB_LIVE=1 to run against gemini.google.com" }, () => {
+  let h: Harness;
+  before(async () => {
+    h = await startHarness();
+  });
+  after(async () => {
+    await h?.close();
+  });
+
+  it("says it is Gemini when the page is learned, then finds its skill in ~/.gemini/skills", { timeout: 360_000 }, async () => {
+    const skill = `otter-${randomBytes(3).toString("hex")}`;
+    mkdirSync(join(h.dir, ".gemini", "skills", skill), { recursive: true });
+    writeFileSync(join(h.dir, ".gemini", "skills", skill, "SKILL.md"), `---\nname: ${skill}\ndescription: Counts the otters in a picture.\n---\n`);
+    // no shell: there ~ is the home folder of this computer, not the test's
+    await h.setSettings({ policies: { run_command: "off", write_file: "off", list_directory: "auto", read_file: "auto" } });
+    const page = await h.context.newPage();
+    dismissSignIn(page);
+    await page.goto("https://gemini.google.com/app");
+    const editor = page.locator("rich-textarea .ql-editor");
+    await editor.waitFor({ timeout: 30_000 });
+    assert.equal(await h.toggle(page), true);
+    await page.waitForFunction(() => document.querySelector("gmb-status")?.shadowRoot?.textContent?.includes("tools"), null, { timeout: 15_000 });
+
+    const learnBox = page.locator("gmb-status .learn");
+    await page.locator("gmb-status .pill").click();
+    await page.locator("gmb-status button", { hasText: "Learn this page" }).click();
+    await editor.click();
+    await page.waitForFunction(() => document.querySelector<HTMLElement>("rich-textarea .ql-editor")?.innerText.includes("gmb_test"));
+    await page.getByRole("button", { name: /send message/i }).click();
+    await learnBox.filter({ hasText: "Everything seen" }).waitFor({ timeout: 120_000 });
+    await page.locator("gmb-status button", { hasText: "Stop learning" }).click();
+    await learnBox.filter({ hasText: "What the extension learned" }).waitFor();
+    const reply = await page.locator("model-response").last().innerText();
+    assert.equal(await learnBox.locator("[data-ai]").getAttribute("data-ai"), "gemini", `the reply: ${reply}`);
+    await page.locator("gmb-status button", { hasText: "Close" }).click();
+
+    try {
+      await editor.click();
+      await page.keyboard.type("Which skills do you have on my computer? Name them.");
+      await page.keyboard.press("Enter");
+      await page.waitForFunction(
+        (w) => [...document.querySelectorAll("model-response")].some((r) => (r as HTMLElement).innerText.includes(w) && !r.querySelector("code-block")),
+        skill,
+        { timeout: 200_000, polling: 1000 },
+      );
+    } finally {
+      await page.screenshot({ path: join(process.env.SHOTS ?? h.dir, "live-own-folder.png"), fullPage: false });
+      console.log(`calls: ${h.calls.join(", ")}\nsent: ${JSON.stringify(await page.locator("user-query").allInnerTexts()).slice(0, 1500)}`);
+    }
+    assert.ok(h.calls.includes("list_directory"), `calls: ${h.calls.join(", ")}`);
   });
 });

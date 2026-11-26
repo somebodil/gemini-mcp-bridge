@@ -1,5 +1,6 @@
 // An MCP server for the tests, built with the official SDK: the four tools of local-mcp-bridge-server, in
-// simple form, over Streamable HTTP. Stateless with JSON answers, or with sessions and SSE answers.
+// simple form, over Streamable HTTP. Stateless with JSON answers, or with sessions and SSE answers. A path of the
+// file tools that starts with ~ is in `home` (the harness's folder), not in the home folder of this computer.
 
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -22,7 +23,11 @@ export const TOOLS: Tool[] = [
 
 const text = (t: string, isError = false): CallToolResult => ({ content: [{ type: "text", text: t }], ...(isError ? { isError: true } : {}) });
 
-async function run(name: string, a: Record<string, unknown>): Promise<CallToolResult> {
+async function run(name: string, a: Record<string, unknown>, home: string | undefined): Promise<CallToolResult> {
+  const path = (v: unknown) => {
+    const s = String(v);
+    return home && (s === "~" || s.startsWith("~/")) ? join(home, s.slice(1)) : s;
+  };
   try {
     switch (name) {
       case "run_command":
@@ -36,15 +41,15 @@ async function run(name: string, a: Record<string, unknown>): Promise<CallToolRe
           }),
         );
       case "read_file":
-        return text(await readFile(String(a.path), "utf8"));
+        return text(await readFile(path(a.path), "utf8"));
       case "write_file":
-        await writeFile(String(a.path), String(a.content));
+        await writeFile(path(a.path), String(a.content));
         return text(`Wrote ${String(a.path)}.`);
       case "list_directory": {
-        const path = String(a.path);
-        const lines = [path];
-        for (const e of await readdir(path, { withFileTypes: true })) {
-          lines.push(e.isDirectory() ? `[DIR]  ${e.name}/` : `[FILE] ${e.name} (${(await stat(join(path, e.name))).size} bytes)`);
+        const dir = path(a.path);
+        const lines = [dir];
+        for (const e of await readdir(dir, { withFileTypes: true })) {
+          lines.push(e.isDirectory() ? `[DIR]  ${e.name}/` : `[FILE] ${e.name} (${(await stat(join(dir, e.name))).size} bytes)`);
         }
         return text(lines.join("\n"));
       }
@@ -56,12 +61,12 @@ async function run(name: string, a: Record<string, unknown>): Promise<CallToolRe
   }
 }
 
-function mcp(calls: string[], name: string): Server {
+function mcp(calls: string[], name: string, home: string | undefined): Server {
   const s = new Server({ name, version: "1.0.0" }, { capabilities: { tools: {} }, instructions: "A server for tests." });
   s.setRequestHandler(ListToolsRequestSchema, () => ({ tools: TOOLS }));
   s.setRequestHandler(CallToolRequestSchema, (req) => {
     calls.push(req.params.name);
-    return run(req.params.name, req.params.arguments ?? {});
+    return run(req.params.name, req.params.arguments ?? {}, home);
   });
   return s;
 }
@@ -82,7 +87,7 @@ export interface TestServer {
 
 /** `name`: the server's name in its answer to initialize (the extension sends the performance log only to
  * local-mcp-bridge-server, by either of its names). */
-export async function startTestServer(opts: { token?: string; sessions?: boolean; name?: string } = {}): Promise<TestServer> {
+export async function startTestServer(opts: { token?: string; sessions?: boolean; name?: string; home?: string } = {}): Promise<TestServer> {
   const sessions = new Map<string, StreamableHTTPServerTransport>();
   const calls: string[] = [];
   const methods: string[] = [];
@@ -101,7 +106,7 @@ export async function startTestServer(opts: { token?: string; sessions?: boolean
       if (req.method === "DELETE") methods.push("DELETE");
       for (const m of Array.isArray(body) ? body : [body]) if (m && typeof (m as { method?: unknown }).method === "string") methods.push((m as { method: string }).method);
       if (!opts.sessions) {
-        const server = mcp(calls, name);
+        const server = mcp(calls, name, opts.home);
         const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
         res.on("close", () => void transport.close());
         await server.connect(transport);
@@ -115,7 +120,7 @@ export async function startTestServer(opts: { token?: string; sessions?: boolean
           sessionIdGenerator: () => randomUUID(),
           onsessioninitialized: (id) => void sessions.set(id, t),
         });
-        await mcp(calls, name).connect(t);
+        await mcp(calls, name, opts.home).connect(t);
         transport = t;
       }
       await transport.handleRequest(req, res, body);

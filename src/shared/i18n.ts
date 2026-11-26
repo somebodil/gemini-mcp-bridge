@@ -1,5 +1,7 @@
 // The words the extension shows, in English and Korean. Chrome's language picks one; English otherwise.
 
+import type { Ai } from "./layouts.ts";
+
 const en = {
   tools: "{n} tools",
   statusOff: "Off",
@@ -40,8 +42,12 @@ const en = {
   chipInstructions: "MCP Bridge instructions · {n} tools",
   chipUpdate: "MCP Bridge tool list update",
   chipResults: "Tool results: {s}",
-  siteNotLearned: "Not learned on this site yet: the extension guesses where things are.",
+  siteNotLearned: "Not learned on this site yet: the extension guesses where things are, and does not know which AI answers here.",
+  siteNotLearnedKnown: "Not learned on this site yet: the extension does not know which AI answers here.",
   siteLearned: "Learned on this site ({date}).",
+  siteAi: "The AI here: {ai}.",
+  siteAiUnknown: "Which AI answers here is not known: learn the page again.",
+  aiOther: "an AI other than Claude, ChatGPT and Gemini",
   learnStart: "Learn this page",
   learnAgain: "Learn again",
   learnShow: "What it learned",
@@ -61,6 +67,8 @@ const en = {
   resultsTitle: "What the extension learned on this page",
   resultsHint: "Each part is outlined on the page. If one is wrong, pick it on the page (Pick; ? says what to pick), or learn again.",
   resultsNothing: "Nothing was learned: the extension goes on guessing.",
+  resultsAi: "The AI here says it is {ai}.",
+  resultsAiMissing: "The reply did not say which AI answers here.",
   role_input: "Input box",
   role_send: "Send button",
   role_busy: "Writing indicator",
@@ -82,7 +90,7 @@ const en = {
   noteBusyNow: "Writing now",
   noteIdleNow: "Not writing now",
   learnMessage:
-    "This is a test from the Gemini MCP Bridge extension, to learn how this page shows messages. Reply with only this JSON in a code block: {json}",
+    'This is a test from the Gemini MCP Bridge extension, to learn how this page shows messages and which AI answers on it. Reply with only this JSON in a code block, with "ai" filled in with which AI you are (claude, chatgpt, gemini, or other): {json}',
   flowSent: "Sent",
   flowSentWith: "Sent with {s}",
   withInstructions: "the tool instructions",
@@ -206,6 +214,7 @@ const en = {
   optLearnedAt: "learned {date}",
   optParts: "{n} of {all} parts",
   optMissing: "not found: {names}",
+  optAi: "AI: {ai}",
   optPickedParts: "picked by hand: {names}",
   optDelete: "Delete",
 } as const;
@@ -252,8 +261,12 @@ const ko: Record<Key, string> = {
   chipInstructions: "MCP Bridge 지침 · 도구 {n}개",
   chipUpdate: "MCP Bridge 도구 목록 갱신",
   chipResults: "도구 결과: {s}",
-  siteNotLearned: "이 사이트는 아직 학습하지 않았습니다. 확장이 추측으로 동작합니다.",
+  siteNotLearned: "이 사이트는 아직 학습하지 않았습니다. 확장이 추측으로 동작하고, 여기서 답하는 AI가 무엇인지 모릅니다.",
+  siteNotLearnedKnown: "이 사이트는 아직 학습하지 않았습니다. 여기서 답하는 AI가 무엇인지 모릅니다.",
   siteLearned: "이 사이트는 학습했습니다 ({date}).",
+  siteAi: "여기서 답하는 AI: {ai}.",
+  siteAiUnknown: "여기서 답하는 AI는 모릅니다. 다시 학습하세요.",
+  aiOther: "Claude, ChatGPT, Gemini가 아닌 AI",
   learnStart: "학습 시작",
   learnAgain: "다시 학습",
   learnShow: "학습 결과",
@@ -273,6 +286,8 @@ const ko: Record<Key, string> = {
   resultsTitle: "이 페이지에서 배운 것",
   resultsHint: "화면에 각 부분의 테두리가 보입니다. 틀린 것은 고르기로 페이지에서 직접 고르거나(?: 무엇을 고르는지) 다시 학습하세요.",
   resultsNothing: "배운 것이 없습니다. 전처럼 추측으로 동작합니다.",
+  resultsAi: "여기서 답하는 AI는 자기가 {ai}라고 했습니다.",
+  resultsAiMissing: "답에 어떤 AI인지가 없었습니다.",
   role_input: "입력창",
   role_send: "보내기 버튼",
   role_busy: "쓰는 중 표시",
@@ -294,7 +309,7 @@ const ko: Record<Key, string> = {
   noteBusyNow: "지금 쓰는 중",
   noteIdleNow: "지금은 쓰지 않음",
   learnMessage:
-    "Gemini MCP Bridge 확장이 이 페이지가 메시지를 보여 주는 방식을 배우려는 시험입니다. 다른 말 없이 다음 JSON만 코드 블록에 담아 답하세요: {json}",
+    'Gemini MCP Bridge 확장이 이 페이지가 메시지를 보여 주는 방식과 여기서 답하는 AI를 배우려는 시험입니다. 다른 말 없이 다음 JSON만 코드 블록에 담아 답하되, "ai"에는 당신이 어떤 AI인지(claude, chatgpt, gemini, 그 밖이면 other) 채우세요: {json}',
   flowSent: "보냄",
   flowSentWith: "보냄 · {s} 붙임",
   withInstructions: "도구 안내",
@@ -414,6 +429,7 @@ const ko: Record<Key, string> = {
   optLearnedAt: "{date} 학습",
   optParts: "{all}개 중 {n}개",
   optMissing: "못 찾음: {names}",
+  optAi: "AI: {ai}",
   optPickedParts: "직접 고름: {names}",
   optDelete: "삭제",
 };
@@ -430,4 +446,9 @@ const dict: Record<Key, string> = lang().toLowerCase().startsWith("ko") ? ko : e
 
 export function t(key: Key, subs: Record<string, string | number> = {}): string {
   return dict[key].replace(/\{(\w+)\}/g, (_, k: string) => String(subs[k] ?? ""));
+}
+
+/** The name of an AI, as the panel and the options page show it. */
+export function aiName(ai: Ai): string {
+  return ai === "other" ? t("aiOther") : { claude: "Claude", chatgpt: "ChatGPT", gemini: "Gemini" }[ai];
 }
