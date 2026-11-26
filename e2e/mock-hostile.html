@@ -32,6 +32,8 @@
       //   canvas       a tall document one writes in beside the chat (contenteditable, Enter is a new line there)
       //   lateMine: N  the user's message is drawn only N ms after it went (a server that answers first)
       //   deepEditor: N  the input box N wrappers deep in the composer, the buttons outside them (Gemini's is)
+      //   strip        the input box is drawn in the middle of the page, its buttons in a row under it, and it is the
+      //                child of a thin strip at the bottom of the page (Gemini's new chat is so)
       //   swapLate: N  N ms after a reply is finished its code blocks are drawn otherwise (a heading with the
       //                language and a Copy button, line numbers): other elements, other text
       //   window.__switch(): another conversation opened from the list: the address changes at once, the other
@@ -58,6 +60,10 @@
         .editor { flex: 1; min-height: 24px; max-height: 240px; overflow-y: auto; white-space: pre-wrap; outline: none; font: inherit; }
         textarea.editor { border: 0; resize: none; }
         .wrap { flex: 1; display: flex; min-width: 0; }
+        .strip { position: fixed; left: 0; bottom: 0; width: 80vw; height: 40px; }
+        .strip .composer { bottom: auto; top: calc(100vh - 430px); flex-wrap: wrap; }
+        .strip .composer > .wrap, .strip .composer > .editor { flex: 0 0 100%; }
+        .strip .send { margin-left: auto; }
         .send { width: 32px; height: 32px; border-radius: 50%; border: 0; cursor: pointer; flex: none; background: #1a73e8 center / 14px no-repeat
           url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'%3E%3Cpath d='M5 1 9 6H6v3H4V6H1z' fill='white'/%3E%3C/svg%3E"); }
         .send.is-stop { background: #c5221f; }
@@ -88,6 +94,12 @@
       live.className = "sr-only";
       live.setAttribute("aria-live", "polite");
       app.append(turnsEl, composer);
+      if (O.strip) {
+        const strip = document.createElement("div");
+        strip.className = "strip";
+        app.append(strip);
+        strip.append(composer);
+      }
       if (O.sidebar) {
         const side = document.createElement("div");
         side.className = "side";

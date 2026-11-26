@@ -56,6 +56,7 @@ interface Opts {
   lateMine?: number;
   swapLate?: number;
   deepEditor?: number;
+  strip?: boolean;
 }
 
 type MockWindow = { __sent: string[]; __feedback: number; __sidebar: number; __root: ShadowRoot | HTMLElement; __switch: () => void };
@@ -182,6 +183,33 @@ describe("hostile chat pages, learned", () => {
       assert.ok(l?.busy, "the stop button, as the sign of writing");
       await closeResults(c.page);
       await roundTrip(c, "Enter");
+    } finally {
+      await c.page.close();
+    }
+  });
+
+  it("an input box in the middle of the page whose parent is a strip at the bottom: the learning box keeps off it and its send button", async () => {
+    await h.setSettings(auto("list_directory"));
+    const c = await open({ strip: true, deepEditor: 3 }, replies());
+    try {
+      await startLearning(c.page);
+      await (await el(c.page, ".editor")).click();
+      // the box is placed anew when the extension next looks at the page
+      await c.page.waitForTimeout(1200);
+      const ours = await box(c.page).boundingBox();
+      assert.ok(ours);
+      for (const sel of [".editor", ".send"]) {
+        const b = await (await el(c.page, sel)).boundingBox();
+        assert.ok(b);
+        assert.ok(ours.x + ours.width <= b.x || b.x + b.width <= ours.x || ours.y + ours.height <= b.y || b.y + b.height <= ours.y, `the box ${JSON.stringify(ours)} covers ${sel} ${JSON.stringify(b)}`);
+      }
+      // a real click on the send button reaches it
+      await press(c.page, "click");
+      await box(c.page).filter({ hasText: "Everything seen" }).waitFor({ timeout: 30_000 });
+      await button(c.page, "Stop learning").click();
+      await box(c.page).filter({ hasText: "What the extension learned" }).waitFor();
+      await closeResults(c.page);
+      await roundTrip(c, "click");
     } finally {
       await c.page.close();
     }

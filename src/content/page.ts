@@ -89,12 +89,17 @@ export function inputAreaRects(els: Element[]): DOMRect[] {
   return out;
 }
 
-/** The box around the input box `ed` with its buttons: its largest ancestor not much taller than it, not page-wide. */
+/**
+ * The box around the input box `ed` with its buttons: its largest ancestor not much taller than it, not page-wide.
+ * An ancestor that is drawn elsewhere (Gemini's centered input box is the child of a strip at the bottom of the
+ * page) is not around it, and is passed over.
+ */
 export function composerOf(ed: Element): Element {
   let top = ed;
   let r = ed.getBoundingClientRect();
   for (let el = parentOf(ed), i = 0; el && i < 12; el = parentOf(el), i++) {
     const b = el.getBoundingClientRect();
+    if (b.left > r.left + 2 || b.top > r.top + 2 || b.right < r.right - 2 || b.bottom < r.bottom - 2) continue;
     if (b.height > Math.max(r.height + 150, 220) || b.width > innerWidth * 0.95) break;
     r = b;
     top = el;
