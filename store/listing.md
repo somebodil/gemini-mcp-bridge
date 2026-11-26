@@ -36,7 +36,7 @@ YOU STAY IN CONTROL
 • The extension reaches only 127.0.0.1 and localhost.
 
 WHAT YOU NEED
-The matching local server, gemini-mcp-bridge-server (free, open source, Node.js): run "npx gemini-mcp-bridge-server" and enter the address and token it prints in the extension's options. It offers shell and file tools and passes through any MCP servers you list (Playwright, databases, and more). Any other MCP server that speaks Streamable HTTP on localhost works too.
+The matching local server, local-mcp-bridge-server (free, open source, Node.js): run "npx local-mcp-bridge-server" and enter the address and token it prints in the extension's options. It offers shell and file tools and passes through any MCP servers you list (Playwright, databases, and more). Any other MCP server that speaks Streamable HTTP on localhost works too.
 
 PRIVACY
 The extension sends nothing to its developer or anyone else. Tool results become part of your Gemini conversation, which Google handles under its own terms.
@@ -67,7 +67,7 @@ Gemini MCP Bridge는 웹의 Gemini(gemini.google.com, Gemini Enterprise, 다른 
 • 확장은 127.0.0.1과 localhost에만 연결합니다.
 
 필요한 것
-짝이 되는 로컬 서버 gemini-mcp-bridge-server (무료, 오픈 소스, Node.js): "npx gemini-mcp-bridge-server"를 실행하고, 보여 주는 주소와 토큰을 확장 설정에 넣으세요. 셸과 파일 도구가 있고, 적어 둔 MCP 서버(Playwright, 데이터베이스 등)를 그대로 연결합니다. localhost에서 Streamable HTTP로 도는 다른 MCP 서버도 됩니다.
+짝이 되는 로컬 서버 local-mcp-bridge-server (무료, 오픈 소스, Node.js): "npx local-mcp-bridge-server"를 실행하고, 보여 주는 주소와 토큰을 확장 설정에 넣으세요. 셸과 파일 도구가 있고, 적어 둔 MCP 서버(Playwright, 데이터베이스 등)를 그대로 연결합니다. localhost에서 Streamable HTTP로 도는 다른 MCP 서버도 됩니다.
 
 개인정보
 확장은 개발자나 다른 누구에게도 아무것도 보내지 않습니다. 도구 결과는 Gemini 대화의 일부가 되고, Google이 자기 약관에 따라 다룹니다.

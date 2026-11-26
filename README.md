@@ -6,7 +6,7 @@ It works only in the tabs where you turn it on: click its icon in Chrome's toolb
 
 This is the Chrome extension. It works with a local MCP server, because an extension cannot touch your computer by itself:
 
-- **[gemini-mcp-bridge-server](https://github.com/somebodil/gemini-mcp-bridge-server)**, the matching server: shell and file tools, plus any MCP servers you list. Start it with `npx gemini-mcp-bridge-server`.
+- **[local-mcp-bridge-server](https://github.com/somebodil/local-mcp-bridge-server)**, the matching server: shell and file tools, plus any MCP servers you list. Start it with `npx local-mcp-bridge-server`. Until its 0.6.0 it was called gemini-mcp-bridge-server: [moving over](https://github.com/somebodil/local-mcp-bridge-server#from-gemini-mcp-bridge-server) keeps its token.
 - **Any other MCP server** on `127.0.0.1` or `localhost` that speaks Streamable HTTP.
 
 ## How it works
@@ -45,16 +45,16 @@ No `node`, or a version under 20: install the LTS version from [nodejs.org](http
 Then start the server:
 
 ```bash
-npx gemini-mcp-bridge-server
+npx local-mcp-bridge-server
 ```
 
 The first start makes a config file with a random token and prints what the extension needs:
 
 ```
-gemini-mcp-bridge-server 0.6.0
+local-mcp-bridge-server 0.7.0
   URL:    http://127.0.0.1:7341/mcp
   Token:  3q2-...
-  Config: /home/you/.config/gemini-mcp-bridge-server/config.json (new)
+  Config: /home/you/.config/local-mcp-bridge-server/config.json (new)
   Tools:  run_command, read_file, list_directory
 ```
 
@@ -63,11 +63,11 @@ Leave this window open while you use Gemini: the server runs as long as the wind
 To have the server start by itself whenever you log in, install it once and register it (macOS, Linux and Windows, no administrator rights):
 
 ```bash
-npm install -g gemini-mcp-bridge-server
-gemini-mcp-bridge-server install-service
+npm install -g local-mcp-bridge-server
+local-mcp-bridge-server install-service
 ```
 
-More about the server: [gemini-mcp-bridge-server](https://github.com/somebodil/gemini-mcp-bridge-server#readme).
+More about the server: [local-mcp-bridge-server](https://github.com/somebodil/local-mcp-bridge-server#readme).
 
 ### 2. Add the extension to Chrome
 
@@ -84,8 +84,8 @@ More about the server: [gemini-mcp-bridge-server](https://github.com/somebodil/g
 On the options page (later: right-click the extension's icon, then **Options**; or **Settings** in the corner button):
 
 1. Leave the URL as it is (`http://127.0.0.1:7341/mcp`), unless you started the server with another port.
-2. Paste the token the server printed. Lost it? Run `gemini-mcp-bridge-server token` (or `npx gemini-mcp-bridge-server token`).
-3. Press **Test**. It should say *Connected · gemini-mcp-bridge-server · 4 tools*, and list the tools below.
+2. Paste the token the server printed. Lost it? Run `local-mcp-bridge-server token` (or `npx local-mcp-bridge-server token`).
+3. Press **Test**. It should say *Connected · local-mcp-bridge-server · 3 tools* (4 on Windows), and list the tools below.
 
 ![The options page, connected](store/images/screenshot-3-options.png)
 
@@ -137,14 +137,14 @@ Your settings stay. The server updates the same way it was installed: `npx` take
 ## Uninstall
 
 - The extension: **Remove** on its card in `chrome://extensions`, then delete its folder.
-- The server: `gemini-mcp-bridge-server uninstall-service` if you registered it, `npm uninstall -g gemini-mcp-bridge-server` if you installed it, and delete its config file (the path is in its first lines of output) to forget the token.
+- The server: `local-mcp-bridge-server uninstall-service` if you registered it, `npm uninstall -g local-mcp-bridge-server` if you installed it, and delete its config file (the path is in its first lines of output) to forget the token.
 
 ## Troubleshooting
 
 | What you see | What to do |
 |---|---|
 | *Cannot reach http://127.0.0.1:7341/mcp ... Is the local server running?* | Start the server (step 1), then press **Test** or **Refresh**. |
-| *HTTP 401 ... Check the token* | The token in the options does not match the server's: paste it again (`gemini-mcp-bridge-server token`). |
+| *HTTP 401 ... Check the token* | The token in the options does not match the server's: paste it again (`local-mcp-bridge-server token`). |
 | *Only 127.0.0.1 and localhost addresses can be reached* | The extension talks only to servers on your own computer. |
 | No corner button on the page | The extension is off in this tab: click its icon (it shows **ON** when on). After an update of the extension, every tab starts off. |
 | The icon does nothing on a page | Chrome does not let extensions into some pages (`chrome://` pages, the Chrome Web Store). |
@@ -152,7 +152,7 @@ Your settings stay. The server updates the same way it was installed: `npx` take
 | *No reply found yet* on a learned page | The page changed since it was learned: press **Learn again** on that line. |
 | Gemini says it cannot access your computer | Start a new chat: the instructions go with the first message of a chat. Check that the corner button is there and shows tools, and not *Off*. |
 | Gemini writes a call, but nothing happens | Look at the card under it: it may be waiting for **Run**. A call in a chat opened from the history never runs: only replies written while the page is open do. |
-| A call ends in an error, a reply waits forever, or a command does something other than in your terminal | Open DevTools (F12) on the chat page: every problem the extension runs into is an error in the console that starts with `[MCP Bridge]`. A failed call comes with the error and the arguments sent, a call it could not read with what Gemini wrote; a reply it stopped waiting for, text or results the page did not take, and a server it cannot reach are there too. The service worker's console (`chrome://extensions`, MCP Bridge, *service worker*) shows the problems with the servers, and gemini-mcp-bridge-server prints each request and its reply. The card shows the arguments as the tool gets them: a command copied from it runs the same in a terminal. |
+| A call ends in an error, a reply waits forever, or a command does something other than in your terminal | Open DevTools (F12) on the chat page: every problem the extension runs into is an error in the console that starts with `[MCP Bridge]`. A failed call comes with the error and the arguments sent, a call it could not read with what Gemini wrote; a reply it stopped waiting for, text or results the page did not take, and a server it cannot reach are there too. The service worker's console (`chrome://extensions`, MCP Bridge, *service worker*) shows the problems with the servers, and local-mcp-bridge-server prints each request and its reply. The card shows the arguments as the tool gets them: a command copied from it runs the same in a terminal. |
 | The extension disappeared after Chrome restarted | Its folder was moved or deleted: unzip it again and **Load unpacked** again. |
 | The page is slow with the extension on | Turn on the **Performance log** in the options, use the page as usual for a few minutes, and copy the lines into an issue. They say how long the slow clicks, keys and frames took and how much of each was the extension's own work. |
 
@@ -182,7 +182,7 @@ Read this before you allow a tool to run by itself.
     - each click or key that took 100 ms or more to show its effect (what Chrome's *Interaction to Next Paint* measures), each frame of 150 ms or more, and how much of that time was the extension's own work;
     - every minute, how much time the extension took and in which of its functions.
 
-  The lines carry names and numbers only (the site without its path, the tag and classes of the element clicked, the hosts and file names of the page's slow scripts), no text of the page. The last ones stay on the options page, with **Copy** and **Clear**, until the browser closes. When gemini-mcp-bridge-server is connected, it appends them to its `perf.log` too (`gemini-mcp-bridge-server perf-log` shows them).
+  The lines carry names and numbers only (the site without its path, the tag and classes of the element clicked, the hosts and file names of the page's slow scripts), no text of the page. The last ones stay on the options page, with **Copy** and **Clear**, until the browser closes. When local-mcp-bridge-server is connected, it appends them to its `perf.log` too (`local-mcp-bridge-server perf-log` shows them).
 
 ## Limits
 

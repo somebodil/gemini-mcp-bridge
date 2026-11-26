@@ -1,6 +1,7 @@
 // The performance log (an option): a slow click and a long frame are written down with the extension's share,
-// with a summary of the extension's time; the lines show on the options page, go to gemini-mcp-bridge-server and to
-// no other server, carry no text of the page, and nothing is measured or kept while the option is off.
+// with a summary of the extension's time; the lines show on the options page, go to local-mcp-bridge-server (by
+// either of its names) and to no other server, carry no text of the page, and nothing is measured or kept while
+// the option is off.
 
 import assert from "node:assert/strict";
 import { after, describe, it } from "node:test";
@@ -51,7 +52,7 @@ async function waitLine(h: Harness, re: RegExp, timeout = 15_000): Promise<strin
 
 describe("performance log", () => {
   it("writes down a slow click, a long frame and the extension's time; shows them; the server gets them", async () => {
-    const { h, page } = await setUp("gemini-mcp-bridge-server");
+    const { h, page } = await setUp("local-mcp-bridge-server");
     await page.click("#b");
     const click = await waitLine(h, /slow click/);
     assert.match(click, /^\d\d:\d\d:\d\d slow click (\d+) ms \(wait \d+, handlers (\d+), paint \d+\) on button\.slow · extension \d+ ms/);
@@ -68,7 +69,7 @@ describe("performance log", () => {
     await options.goto(new URL("options.html", h.worker.url()).href);
     const box = options.locator("textarea.perf");
     await options.waitForFunction(() => document.querySelector<HTMLTextAreaElement>("textarea.perf")?.value.includes("slow click"));
-    await options.getByText("gemini-mcp-bridge-server writes them to /home/test/.config/gemini-mcp-bridge-server/perf.log too.").waitFor();
+    await options.getByText("local-mcp-bridge-server writes them to /home/test/.config/local-mcp-bridge-server/perf.log too.").waitFor();
     await options.getByRole("button", { name: "Clear" }).click();
     await options.waitForFunction(() => document.querySelector<HTMLTextAreaElement>("textarea.perf")?.value === "");
     assert.equal(await box.inputValue(), "");
@@ -85,7 +86,19 @@ describe("performance log", () => {
     await page.close();
   });
 
-  it("keeps the lines in the browser only when the server is not gemini-mcp-bridge-server", async () => {
+  it("sends them to the server of the former name too, gemini-mcp-bridge-server (until its 0.6.0)", async () => {
+    const { h, page } = await setUp("gemini-mcp-bridge-server");
+    await page.click("#b");
+    await waitLine(h, /slow click/);
+    const until = Date.now() + 15_000;
+    while (!h.perf.some((l) => l.includes("slow click"))) {
+      if (Date.now() > until) throw new Error(`the server got no slow click: ${h.perf.join("\n")}`);
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    await page.close();
+  });
+
+  it("keeps the lines in the browser only when the server is another one", async () => {
     const { h, page } = await setUp();
     await page.click("#b");
     await waitLine(h, /slow click/);

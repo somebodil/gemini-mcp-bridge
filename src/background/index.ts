@@ -167,9 +167,10 @@ async function callTool(name: string, args: Record<string, unknown>, approved: b
 
 // ---------------------------------------------------------------------------------------------------------
 // The performance log (content/perf.ts): its last lines stay in chrome.storage.session for the options page, and
-// gemini-mcp-bridge-server gets them for its perf.log. Other MCP servers get nothing of it.
+// local-mcp-bridge-server gets them for its perf.log. Other MCP servers get nothing of it.
 
-const BRIDGE_SERVER = "gemini-mcp-bridge-server";
+/** The matching server, by the name it gives (until its 0.6.0: gemini-mcp-bridge-server). */
+const BRIDGE_SERVERS = new Set(["local-mcp-bridge-server", "gemini-mcp-bridge-server"]);
 const PERF_MAX_CHARS = 100_000;
 const PERF_MAX_LINES = 50;
 const PERF_MAX_LINE = 2000;
@@ -239,7 +240,7 @@ async function sendPerf(settings: Settings, lines: string[]): Promise<PerfServer
   if (!conns.size) await sync(settings, false);
   let status: PerfServer = { ok: false, why: "none" };
   for (const c of live()) {
-    if (c.client.info?.serverInfo?.name !== BRIDGE_SERVER) continue;
+    if (!BRIDGE_SERVERS.has(c.client.info?.serverInfo?.name ?? "")) continue;
     const got = await postPerf(c, lines);
     if (!status.ok) status = got;
   }

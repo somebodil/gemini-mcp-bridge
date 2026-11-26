@@ -1,4 +1,4 @@
-// An MCP server for the tests, built with the official SDK: the four tools of gemini-mcp-bridge-server, in
+// An MCP server for the tests, built with the official SDK: the four tools of local-mcp-bridge-server, in
 // simple form, over Streamable HTTP. Stateless with JSON answers, or with sessions and SSE answers.
 
 import { execFile } from "node:child_process";
@@ -72,7 +72,7 @@ export interface TestServer {
   calls: string[];
   /** JSON-RPC methods received (requests and notifications), and "DELETE" for a session ended. */
   methods: string[];
-  /** Lines of the performance log posted to /perf (answered as gemini-mcp-bridge-server does). */
+  /** Lines of the performance log posted to /perf (answered as local-mcp-bridge-server does). */
   perf: string[];
   http: HttpServer;
   /** Forgets all sessions, as a restarted server would (sessions mode only). */
@@ -81,7 +81,7 @@ export interface TestServer {
 }
 
 /** `name`: the server's name in its answer to initialize (the extension sends the performance log only to
- * gemini-mcp-bridge-server). */
+ * local-mcp-bridge-server, by either of its names). */
 export async function startTestServer(opts: { token?: string; sessions?: boolean; name?: string } = {}): Promise<TestServer> {
   const sessions = new Map<string, StreamableHTTPServerTransport>();
   const calls: string[] = [];
@@ -95,7 +95,7 @@ export async function startTestServer(opts: { token?: string; sessions?: boolean
       for await (const c of req) chunks.push(c as Buffer);
       if (req.url === "/perf") {
         perf.push(...Buffer.concat(chunks).toString("utf8").split("\n").filter(Boolean));
-        return void res.writeHead(200).end("/home/test/.config/gemini-mcp-bridge-server/perf.log");
+        return void res.writeHead(200).end("/home/test/.config/local-mcp-bridge-server/perf.log");
       }
       const body: unknown = chunks.length ? JSON.parse(Buffer.concat(chunks).toString("utf8")) : undefined;
       if (req.method === "DELETE") methods.push("DELETE");

@@ -5,7 +5,7 @@
 //    was the extension's own work.
 // Lines of names and numbers, the site without its path, the tag and classes of the element clicked, the hosts
 // and file names of the page's slow scripts: no text of the page. The service worker keeps the last lines for the options page and passes them to
-// gemini-mcp-bridge-server, which appends them to its perf.log.
+// local-mcp-bridge-server, which appends them to its perf.log.
 //
 // Off, it costs nothing but a check of one variable per measured function.
 

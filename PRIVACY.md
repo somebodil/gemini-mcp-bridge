@@ -12,14 +12,14 @@ Gemini MCP Bridge is a Chrome extension. It collects no data for its developer a
 
 ## Where data goes
 
-- **To MCP servers on your own computer.** The extension sends the tool calls Gemini writes to the MCP servers you entered in the options. It can reach only `127.0.0.1` and `localhost`. While the performance log is on, its lines go to gemini-mcp-bridge-server among them (no other server), which writes them into a file on that computer.
+- **To MCP servers on your own computer.** The extension sends the tool calls Gemini writes to the MCP servers you entered in the options. It can reach only `127.0.0.1` and `localhost`. While the performance log is on, its lines go to local-mcp-bridge-server among them (or gemini-mcp-bridge-server, its name until 0.6.0; no other server), which writes them into a file on that computer.
 - **To Gemini.** The extension types the instructions, your tool list and the results of the tool calls into your Gemini conversation. They then are messages of that conversation, which Google handles under its own terms and privacy policy, like everything else you type into Gemini.
 
 Nothing else leaves your browser. The extension has no analytics and no remote code, and it makes no requests to other servers.
 
 ## The local server
 
-The matching local server ([gemini-mcp-bridge-server](https://github.com/somebodil/gemini-mcp-bridge-server)) is a separate program. It runs on your computer, takes only requests that carry its token, and keeps its settings (and the performance log, when the extension sends one) in files on your computer. It sends nothing anywhere, except what the MCP servers you configure do on their own.
+The matching local server ([local-mcp-bridge-server](https://github.com/somebodil/local-mcp-bridge-server)) is a separate program. It runs on your computer, takes only requests that carry its token, and keeps its settings (and the performance log, when the extension sends one) in files on your computer. It sends nothing anywhere, except what the MCP servers you configure do on their own.
 
 ## Contact
 
