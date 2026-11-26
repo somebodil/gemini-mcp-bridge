@@ -60,13 +60,6 @@ local-mcp-bridge-server 0.7.0
 
 Leave this window open while you use Gemini: the server runs as long as the window does, and every call shows up there.
 
-To have the server start by itself whenever you log in, install it once and register it (macOS, Linux and Windows, no administrator rights):
-
-```bash
-npm install -g local-mcp-bridge-server
-local-mcp-bridge-server install-service
-```
-
 More about the server: [local-mcp-bridge-server](https://github.com/somebodil/local-mcp-bridge-server#readme).
 
 ### 2. Add the extension to Chrome
@@ -137,7 +130,7 @@ Your settings stay. The server updates the same way it was installed: `npx` take
 ## Uninstall
 
 - The extension: **Remove** on its card in `chrome://extensions`, then delete its folder.
-- The server: `local-mcp-bridge-server uninstall-service` if you registered it, `npm uninstall -g local-mcp-bridge-server` if you installed it, and delete its config file (the path is in its first lines of output) to forget the token.
+- The server: Ctrl+C in its window, and delete its config file (the path is in its first lines of output) to forget the token.
 
 ## Troubleshooting
 
