@@ -14,13 +14,16 @@ export const MARK = {
 
 export const CALL_KEY = "mcp_call";
 
-/** A code block is a call (or a broken one) only when it holds the key as JSON writes it, not when it mentions it. */
+/**
+ * A code block is a call (or a broken one) only when it holds the key in quotes, not when it only names it. Single
+ * and curly quotes count too, so that a call written with them is reported, not passed over.
+ */
 export function looksLikeCall(text: string): boolean {
-  return /["\u201c\u201d]mcp_call["\u201c\u201d]/.test(text) && text.includes("{");
+  return /["'\u2018\u2019\u201c\u201d]mcp_call["'\u2018\u2019\u201c\u201d]/.test(text) && text.includes("{");
 }
 
-/** The key written as a key: each is meant to be a call (in curly quotes too, so that such a call is reported, not passed over). */
-const CALL_AS_KEY = /["\u201c\u201d]mcp_call["\u201c\u201d]\s*:/g;
+/** The key written as a key, in any of those quotes: each is meant to be a call. */
+const CALL_AS_KEY = /["'\u2018\u2019\u201c\u201d]mcp_call["'\u2018\u2019\u201c\u201d]\s*:/g;
 
 /** How to write a JSON string: in the instructions, and at the end of each error about JSON that goes back to Gemini. */
 const HOW = "In a JSON string, write each backslash as \\\\, each double quote as \\\", each line break as \\n and each tab as \\t.";

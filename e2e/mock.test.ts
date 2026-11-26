@@ -215,6 +215,21 @@ describe("with a mock Gemini", () => {
     });
   });
 
+  it("answers a call written with single quotes with JSON.parse's error instead of passing over it, and the call written again runs", async () => {
+    await h.setSettings(auto("list_directory"));
+    const single = `Let me check.\n\`\`\`json\n{'mcp_call': {'tool': 'list_directory', 'arguments': {'path': '${h.dir}'}}}\n\`\`\``;
+    await withMock([single, call("list_directory", { path: h.dir }), "Done."], async ({ page, errors }) => {
+      await say(page, "look");
+      await waitSent(page, 3);
+      const [, first, second] = await sent(page);
+      assert.match(first, /#1 mcp_call → error\n```text\nJSON\.parse cannot read the call: Expected property name.*\nYou wrote: \{'mcp_call': /);
+      assert.match(second, /#1 list_directory → ok/);
+      assert.deepEqual(h.calls, ["list_directory"]);
+      assert.equal(errors.length, 1, errors.join("\n"));
+      assert.match(errors[0], /A call in the reply could not be read: JSON\.parse cannot read the call/);
+    });
+  });
+
   it("tells Gemini about a tool that does not exist", () =>
     withMock([call("format_disk", {}), "OK."], async ({ page, errors }) => {
       await say(page, "x");

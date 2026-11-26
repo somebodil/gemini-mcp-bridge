@@ -74,7 +74,7 @@ describe("parseCalls", () => {
   });
 
   it("ignores code blocks without the key, and blocks that only mention it", () => {
-    assert.deepEqual(parseCalls(['{"tool": "x"}', "print('hi')", "the mcp_call blocks", "mcp_call", '{"kind": "mcp_call", "n": {}}']), { calls: [], problems: [] });
+    assert.deepEqual(parseCalls(['{"tool": "x"}', "print('hi')", "the mcp_call blocks", "mcp_call", '{"kind": "mcp_call", "n": {}}', "d = {}\nd['mcp_call'] = 1"]), { calls: [], problems: [] });
   });
 
   it("accepts the near misses of the shape, in JSON that JSON.parse reads", () => {
@@ -137,10 +137,13 @@ describe("parseCalls", () => {
     assert.match(two.problems[0].snippet, /^\{"mcp_call": \{"tool": "b"/);
   });
 
-  it("reports a call written with curly quotes, in a block and in plain text", () => {
-    const curly = "{\u201cmcp_call\u201d: {\u201ctool\u201d: \u201cb\u201d}}";
-    assert.match(parseCalls([curly]).problems[0]?.error ?? "", /^JSON\.parse cannot read the call: /);
-    assert.match(parseCalls([], `Sure. ${curly}`).problems[0]?.error ?? "", /^JSON\.parse cannot read the call: /);
+  it("reports a call written with single or curly quotes, in a block and in plain text", () => {
+    for (const [open, close] of ["''", "\u2018\u2019", "\u201c\u201d"]) {
+      const q = (s: string) => `${open}${s}${close}`;
+      const written = `{${q("mcp_call")}: {${q("tool")}: ${q("b")}}}`;
+      assert.match(parseCalls([written]).problems[0]?.error ?? "", /^JSON\.parse cannot read the call: /, written);
+      assert.match(parseCalls([], `Sure. ${written}`).problems[0]?.error ?? "", /^JSON\.parse cannot read the call: /, written);
+    }
   });
 
   it("takes the key in plain text that does not open an object as a mention", () => {
@@ -217,7 +220,10 @@ describe("more of the parser", () => {
   it("tells a call from a mention", () => {
     assert.equal(looksLikeCall('{"mcp_call": {}}'), true);
     assert.equal(looksLikeCall("{\u201cmcp_call\u201d: {}}"), true);
+    assert.equal(looksLikeCall("{'mcp_call': {}}"), true);
+    assert.equal(looksLikeCall("{\u2018mcp_call\u2019: {}}"), true);
     assert.equal(looksLikeCall("the mcp_call blocks"), false);
+    assert.equal(looksLikeCall("log({'event': 'mcp_call:done'})"), false);
     assert.equal(looksLikeCall('"mcp_call" without an object'), false);
   });
 
@@ -366,10 +372,11 @@ describe("escapes", () => {
       [naive("printf 'a\tb'"), /Bad control character/],
       // a double quote not escaped
       ['{"mcp_call": {"tool": "run_command", "arguments": {"command": "echo "hi""}}}', /./],
-      // a trailing comma, a comment, single quotes
+      // a trailing comma, a comment, single quotes (in the values, and around the key too)
       ['{"mcp_call": {"tool": "a", "arguments": {},}}', /./],
       ['{"mcp_call": {\n  // list it\n  "tool": "a"}}', /./],
       ["{\"mcp_call\": {'tool': 'a'}}", /./],
+      ["{'mcp_call': {'tool': 'a'}}", /Expected property name/],
       // cut off
       ['{"mcp_call": {"tool": "run_command", "arguments": {"command": "ls', /Unterminated string/],
     ];
