@@ -9,6 +9,7 @@
 
 import { t } from "../shared/i18n.ts";
 import { looksLikeCall, MARK, parseCalls, resultsEnd, summarizeResults, TOOLS_HEADING } from "../shared/protocol.ts";
+import { problem } from "../shared/report.ts";
 import { caretToStart, dbg, selectAllIn, sleep, type Finished, type Item, type Page, type Progress } from "./page.ts";
 import { Card, collapse } from "./ui.ts";
 
@@ -302,7 +303,10 @@ export class GeminiPage implements Page {
       if (last) this.expecting = { print: fingerprint(queryText(last)), before: replyIds(), at: Date.now() };
     }
     // a reply that is being written is still awaited, however long it takes
-    if (this.expecting && !generating && Date.now() - this.expecting.at > EXPECT_MAX_MS) this.expecting = null;
+    if (this.expecting && !generating && Date.now() - this.expecting.at > EXPECT_MAX_MS) {
+      problem(`No reply to the message was found within ${EXPECT_MAX_MS / 60_000} minutes: the bridge stopped waiting for it. Gemini's page may have changed (the status menu has "Copy page structure").`);
+      this.expecting = null;
+    }
     const list = responses();
     const awaited = this.awaitedReply(list);
     this.decorate(list, awaited?.id, generating);
@@ -430,8 +434,11 @@ export class GeminiPage implements Page {
     }
     if (!items.length) {
       // Gemini dropped the code fence: the card goes at the end of the reply
-      const parsed = parseCalls([], responseText(resp));
-      if (parsed.calls.length) items.push({ card: this.cardFor(`${id}#text`, resp.querySelector<HTMLElement>(SEL.responseContent) ?? resp), ...parsed });
+      const text = responseText(resp);
+      const parsed = parseCalls([], text);
+      if (parsed.calls.length || parsed.problems.length) items.push({ card: this.cardFor(`${id}#text`, resp.querySelector<HTMLElement>(SEL.responseContent) ?? resp), ...parsed });
+      // prose may name the key too, so nothing goes back to Gemini for it
+      else if (looksLikeCall(text)) problem("The reply names mcp_call outside a code block, and no call could be read from it.", text.slice(0, 2000));
     }
     const found = items.filter((it) => it.calls.length || it.problems.length);
     for (const it of found) it.card.mode = "live";

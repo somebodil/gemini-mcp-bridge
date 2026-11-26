@@ -3,6 +3,7 @@
 
 import { SHADOW_MODE } from "../shared/dom.ts";
 import { t } from "../shared/i18n.ts";
+import { problemOnce } from "../shared/report.ts";
 import type { Role } from "./layout.ts";
 import { timed } from "./perf.ts";
 
@@ -85,7 +86,8 @@ export class Overlay {
     if (!this.source) return;
     try {
       this.items = this.source();
-    } catch {
+    } catch (e) {
+      problemOnce("Could not find the parts to outline on the page.", e);
       this.items = [];
     }
     this.draw();

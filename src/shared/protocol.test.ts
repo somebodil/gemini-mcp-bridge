@@ -123,6 +123,56 @@ describe("parseCalls", () => {
   it("keeps braces inside strings", () => {
     assert.deepEqual(extractObjects('x {"a": "{"} y {"b": 1}').map((o) => o.value), [{ a: "{" }, { b: 1 }]);
   });
+
+  it("reports a broken call even when an object inside it can be read, such as a {} in its code", () => {
+    const r = parseCalls(['{"mcp_call": {"tool": "write_file", "arguments": {"path" "a.js", "content": "const d = {};"}}}']);
+    assert.equal(r.calls.length, 0);
+    assert.equal(r.problems.length, 1);
+    assert.match(r.problems[0].error, /^The block is not valid JSON \(/);
+    // an object that only names the key as a value is not a call: nothing to report
+    assert.deepEqual(parseCalls(['{"kind": "mcp_call", "n": {}}']), { calls: [], problems: [] });
+    // the broken one of two calls in a block, shown from where it starts
+    const two = parseCalls(['{"mcp_call": {"tool": "a"}}\n{"mcp_call": {"tool": "b", "arguments": {"x" "y", "z": {}}}}']);
+    assert.deepEqual(two.calls, [{ tool: "a", arguments: {} }]);
+    assert.equal(two.problems.length, 1);
+    assert.match(two.problems[0].snippet, /^\{"mcp_call": \{"tool": "b"/);
+    assert.match(two.problems[0].error, /^The block is not valid JSON \(.*JSON/);
+  });
+
+  it("reads code whose double quotes were not escaped, across lines and with braces", () => {
+    const code = 'const d = {};\nconsole.log("hi", d);\nprint("a", "b")\nm = {"k": [1, "x"]}\n<div class="c">"</div>\nprint("}}}")\n';
+    const block = `{"mcp_call": {"tool": "write_file", "arguments": {"path": "a.js", "content": "${code}"}}}`;
+    assert.deepEqual(parseCalls([block]).calls, [{ tool: "write_file", arguments: { path: "a.js", content: code } }]);
+    // indented, and the next call after it
+    const indented = `{\n  "mcp_call": {\n    "tool": "write_file",\n    "arguments": {\n      "path": "b.txt",\n      "content": "say "hi""\n    }\n  }\n}`;
+    assert.deepEqual(parseCalls([indented]).calls[0]?.arguments, { path: "b.txt", content: 'say "hi"' });
+    assert.deepEqual(
+      parseCalls([`${block}\n{"mcp_call": {"tool": "list_directory", "arguments": {"path": "."}}}`]).calls.map((c) => c.tool),
+      ["write_file", "list_directory"],
+    );
+  });
+
+  it("does not guess where bare double quotes could end the value in more than one place: it reports the call", () => {
+    for (const content of [
+      // code that goes on after a quote, a comma and a word in quotes
+      'd = {"a": "x", "b": "y"}',
+      'd = {"a": "x", "b": 1}',
+    ]) {
+      const r = parseCalls([`{"mcp_call": {"tool": "write_file", "arguments": {"path": "a.py", "content": "${content}"}}}`]);
+      assert.deepEqual([r.calls.length, r.problems.length], [0, 1], content);
+    }
+    // a value with bare quotes that another key follows
+    const r = parseCalls(['{"mcp_call": {"tool": "write_file", "arguments": {"content": "say "hi"", "path": "b.txt"}}}']);
+    assert.deepEqual([r.calls.length, r.problems.length], [0, 1]);
+  });
+
+  it("reads arguments written as a JSON string like the call itself: line breaks and backslashes as they are", () => {
+    const asString = (inner: string) => `{"mcp_call": {"tool": "write_file", "arguments": ${JSON.stringify(inner)}}}`;
+    // the line break escaped once only: a raw line break inside the inner JSON
+    assert.deepEqual(parseCalls([asString('{"path": "a.py", "content": "line1\nline2"}')]).calls[0]?.arguments, { path: "a.py", content: "line1\nline2" });
+    assert.deepEqual(parseCalls([asString(String.raw`{"command": "grep '\d+' f"}`)]).calls[0]?.arguments, { command: String.raw`grep '\d+' f` });
+    assert.match(parseCalls([asString("{not json")]).problems[0]?.error ?? "", /is a string that is not JSON/);
+  });
 });
 
 describe("results", () => {
@@ -382,7 +432,7 @@ describe("escapes", () => {
 
   it("says how to write it when the JSON is broken", () => {
     const hint = /\. In a JSON string, write each backslash as \\\\, each double quote as \\", and each line break as \\n\.$/;
-    const unescaped = parseCalls(['{"mcp_call": {"tool": "run_command", "arguments": {"command": "echo "hi""}}}']).problems[0];
+    const unescaped = parseCalls(['{"mcp_call": {"tool": "run_command", "arguments": {"command": "echo "hi"", "n": }}}']).problems[0];
     assert.match(unescaped.error, /^The block is not valid JSON \(.*JSON.*\)/);
     assert.match(unescaped.error, hint);
     assert.match(unescaped.snippet, /echo "hi"/);
@@ -401,8 +451,8 @@ describe("escapes", () => {
   });
 
   it("asks Gemini to keep commands to the shell's syntax", () => {
-    assert.match(buildInstructions([readFile]), /command line takes only the syntax of that shell.*never Python or the code of another language\./);
-    assert.match(buildInstructions([readFile]), /save it to a file first .*then run that file\./);
+    assert.match(buildInstructions([readFile]), /command line takes only the syntax of that shell.*never Python or the code of another language as commands\./);
+    assert.match(buildInstructions([readFile]), /save it to a file first \(with a here-document in the command line, or a tool that writes files\), then run that file: both can go in one command\./);
   });
 });
 

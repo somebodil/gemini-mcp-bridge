@@ -49,11 +49,11 @@ npx gemini-mcp-bridge-server
 The first start makes a config file with a random token and prints what the extension needs:
 
 ```
-gemini-mcp-bridge-server 0.2.0
+gemini-mcp-bridge-server 0.6.0
   URL:    http://127.0.0.1:7341/mcp
   Token:  3q2-...
   Config: /home/you/.config/gemini-mcp-bridge-server/config.json (new)
-  Tools:  run_command, read_file, write_file, list_directory
+  Tools:  run_command, read_file, list_directory
 ```
 
 Leave this window open while you use Gemini: the server runs as long as the window does, and every call shows up there.
@@ -150,7 +150,7 @@ Your settings stay. The server updates the same way it was installed: `npx` take
 | *No reply found yet* on a learned page | The page changed since it was learned: press **Learn again** on that line. |
 | Gemini says it cannot access your computer | Start a new chat: the instructions go with the first message of a chat. Check that the corner button is there and shows tools, and not *Off*. |
 | Gemini writes a call, but nothing happens | Look at the card under it: it may be waiting for **Run**. A call in a chat opened from the history never runs: only replies written while the page is open do. |
-| A call ends in an error, or a command does something other than in your terminal | Open DevTools (F12) on the chat page: the console shows each failed call (`[MCP Bridge] ... failed`) with the error and the arguments sent, and each call it could not read with what Gemini wrote. The service worker's console (`chrome://extensions`, MCP Bridge, *service worker*) shows the same, and gemini-mcp-bridge-server prints `call ... → error: ...`. The card shows the arguments as the tool gets them: a command copied from it runs the same in a terminal. |
+| A call ends in an error, a reply waits forever, or a command does something other than in your terminal | Open DevTools (F12) on the chat page: every problem the extension runs into is an error in the console that starts with `[MCP Bridge]`. A failed call comes with the error and the arguments sent, a call it could not read with what Gemini wrote; a reply it stopped waiting for, text or results the page did not take, and a server it cannot reach are there too. The service worker's console (`chrome://extensions`, MCP Bridge, *service worker*) shows the problems with the servers, and gemini-mcp-bridge-server prints each request and its reply. The card shows the arguments as the tool gets them: a command copied from it runs the same in a terminal. |
 | The extension disappeared after Chrome restarted | Its folder was moved or deleted: unzip it again and **Load unpacked** again. |
 | The page is slow with the extension on | Turn on the **Performance log** in the options, use the page as usual for a few minutes, and copy the lines into an issue. They say how long the slow clicks, keys and frames took and how much of each was the extension's own work. |
 
@@ -205,7 +205,7 @@ npm run e2e:live  # against the real gemini.google.com, signed out (also as an u
 node e2e/obey.ts  # how often each Gemini model follows the instructions (after changing their wording)
 ```
 
-With `localStorage["gmb-debug"] = "1"` on the page, the extension writes its steps to the console (failed calls and unreadable ones are written there always). With `localStorage["gmb-generic"] = "1"`, it uses generic mode on gemini.google.com too.
+With `localStorage["gmb-debug"] = "1"` on the page, the extension writes its steps to the console (its problems are written there always, as errors). With `localStorage["gmb-generic"] = "1"`, it uses generic mode on gemini.google.com too.
 
 A release: set the version in `package.json` (the build writes it into the manifest), then push a tag with that version. The workflow builds the zip, attests it, and creates the release.
 

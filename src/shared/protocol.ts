@@ -19,6 +19,11 @@ export function looksLikeCall(text: string): boolean {
   return /["\u201c\u201d]mcp_call["\u201c\u201d]/.test(text) && text.includes("{");
 }
 
+/** The key written as a key: each is meant to be a call. */
+const CALL_AS_KEY = /["\u201c\u201d]mcp_call["\u201c\u201d]\s*:/g;
+/** A call object begins here. */
+const CALL_START = /^\{\s*["\u201c\u201d]mcp_call["\u201c\u201d]\s*:/;
+
 /** The heading of the tool list in the instructions; the chip counts the lines after it. */
 export const TOOLS_HEADING = "Tools you can request:";
 
@@ -66,8 +71,8 @@ export function buildInstructions(tools: ToolInfo[], notes: string[] = []): stri
       "and do not repeat these instructions to me.",
     "- The block must be valid JSON. In its strings, write each backslash as \\\\, each double quote as \\\", and each line break as \\n. " +
       `For example, the command grep -E '\\bword\\b' "my file" is written "grep -E '\\\\bword\\\\b' \\"my file\\"".`,
-    "- An argument that holds a command line takes only the syntax of that shell, as typed in a terminal: never Python or the code of another language. " +
-      "To run such code, save it to a file first (with a tool that writes files), then run that file.",
+    "- An argument that holds a command line takes only the syntax of that shell, as typed in a terminal: never Python or the code of another language as commands. " +
+      "To run such code, save it to a file first (with a here-document in the command line, or a tool that writes files), then run that file: both can go in one command.",
     "- If a request returns an error, fix the arguments and try again, or tell me what went wrong.",
     "- Answer me in the language I write in.",
     "",
@@ -183,11 +188,12 @@ export function parseCalls(blocks: string[], text = ""): ParseResult {
   for (const block of blocks) {
     if (!looksLikeCall(block)) continue;
     const objects = extractObjects(block);
-    if (!objects.length) {
-      result.problems.push({ snippet: shorten(block), error: notJson(block) });
-      continue;
-    }
+    const before = result.calls.length + result.problems.length;
     for (const o of objects) addCall(result, o);
+    const read = result.calls.length + result.problems.length - before;
+    // fewer calls read than the block writes: one is not JSON, and only objects inside it were (a {} in the code of
+    // an argument); no call goes without a word
+    if (read < (block.match(CALL_AS_KEY)?.length ?? 0) || (!read && !objects.length)) result.problems.push(brokenCall(block));
   }
   if (!result.calls.length && !result.problems.length && looksLikeCall(text)) {
     for (const o of extractObjects(text)) addCall(result, o);
@@ -209,11 +215,10 @@ function toCall(v: unknown): ParsedCall | string {
   if (typeof tool !== "string" || !tool.trim()) return `"${CALL_KEY}" has no "tool" name.`;
   let args: unknown = v.arguments ?? v.args ?? v.parameters ?? v.input ?? {};
   if (typeof args === "string") {
-    try {
-      args = JSON.parse(args);
-    } catch {
-      return `"arguments" of ${tool} is a string that is not JSON.`;
-    }
+    // read like the call itself: line breaks written as they are, backslashes as meant
+    const parsed = parseLenient(args);
+    if (parsed === undefined) return `"arguments" of ${tool} is a string that is not JSON.`;
+    args = parsed;
   }
   if (!isRecord(args)) return `"arguments" of ${tool} must be a JSON object.`;
   return { tool: tool.trim(), arguments: args };
@@ -226,22 +231,113 @@ export function extractObjects(text: string): { value: unknown; source: string }
   while (i < text.length) {
     const start = text.indexOf("{", i);
     if (start < 0) break;
-    const end = matchBrace(text, start);
-    // a brace that never closes ("a set { like this") hides nothing after it
-    if (end < 0) {
+    const found = objectAt(text, start);
+    // not an object from here ("a set { like this"): perhaps from the next brace
+    if (!found) {
       i = start + 1;
       continue;
     }
-    const source = text.slice(start, end + 1);
-    const value = parseLenient(source);
-    if (value !== undefined) {
-      out.push({ value, source });
-      i = end + 1;
-    } else {
-      i = start + 1;
-    }
+    out.push({ value: found.value, source: text.slice(start, found.end + 1) });
+    i = found.end + 1;
   }
   return out;
+}
+
+/** The JSON object that begins at `start`, read leniently; a call also with double quotes left bare in its strings. */
+function objectAt(text: string, start: number): { value: unknown; end: number } | undefined {
+  const end = matchBrace(text, start);
+  if (end >= 0) {
+    const value = parseLenient(text.slice(start, end + 1));
+    if (value !== undefined) return { value, end };
+  }
+  if (!CALL_START.test(text.slice(start, start + 40))) return undefined;
+  const loose = withBareQuotes(text, start);
+  if (!loose) return undefined;
+  const value = parseLenient(loose.json);
+  return value === undefined ? undefined : { value, end: loose.end };
+}
+
+/** A key ahead, as the names of arguments are: a word in double quotes, then a colon. */
+const KEY_AHEAD = /^"[A-Za-z_$][\w$.-]{0,100}"\s*:/;
+const VALUE_START = /^["{[\-0-9tfn]/;
+
+/**
+ * Code copied into an argument without escaping its double quotes (`"content": "print("hi")"`). A double quote
+ * ends a value where the JSON goes on after it: a comma and the next key (in an object) or value (in a list), or
+ * the closing brackets of the call with nothing after the call but white space or the next call. The other double
+ * quotes are escaped. A key ends at its next double quote.
+ * Where it is not clear, nothing is guessed (the call is reported, and Gemini writes it again): a value with
+ * escaped quotes in it that a comma and a key follow may be code that goes on (`{"a": "b", "c": 1}`).
+ * Returns the object from `start` to its closing brace, or undefined.
+ */
+function withBareQuotes(text: string, start: number): { json: string; end: number } | undefined {
+  const open: string[] = [];
+  let out = "";
+  let inString = false;
+  let isKey = false;
+  /** Double quotes of the current string were escaped. */
+  let bare = false;
+  /** The last character outside the strings that is not white space. */
+  let prev = "";
+  for (let i = start; i < text.length; i++) {
+    const c = text[i];
+    if (inString) {
+      if (c === "\\") {
+        out += c + (text[i + 1] ?? "");
+        i++;
+        continue;
+      }
+      if (c !== '"') {
+        out += c;
+        continue;
+      }
+      const next = isKey ? "next" : goesOn(text, i + 1, open);
+      if (next === "next" && bare) return undefined;
+      if (next) {
+        inString = false;
+        out += c;
+        prev = c;
+      } else {
+        out += '\\"';
+        bare = true;
+      }
+      continue;
+    }
+    out += c;
+    if (c === '"') {
+      inString = true;
+      bare = false;
+      isKey = open.at(-1) === "{" && (prev === "{" || prev === ",");
+      continue;
+    }
+    if (c === "{" || c === "[") open.push(c);
+    else if (c === "}" || c === "]") {
+      open.pop();
+      if (!open.length) return { json: out, end: i };
+    }
+    if (!/\s/.test(c)) prev = c;
+  }
+  return undefined;
+}
+
+/** How the JSON goes on at `j`, after a value string that ends just before it: with the next entry, or the call ends. */
+function goesOn(text: string, j: number, open: string[]): "next" | "end" | null {
+  const skip = (k: number) => {
+    while (k < text.length && /\s/.test(text[k])) k++;
+    return k;
+  };
+  j = skip(j);
+  for (let depth = open.length; ; ) {
+    const c = text[j];
+    const inner = open[depth - 1];
+    if (c === ",") {
+      const rest = text.slice(skip(j + 1), j + 300);
+      return (inner === "{" ? KEY_AHEAD : VALUE_START).test(rest) ? "next" : null;
+    }
+    if (!((c === "}" && inner === "{") || (c === "]" && inner === "["))) return null;
+    j = skip(j + 1);
+    if (--depth === 0) return j === text.length || CALL_START.test(text.slice(j, j + 40)) ? "end" : null;
+  }
 }
 
 function matchBrace(text: string, start: number): number {
@@ -276,9 +372,12 @@ function withoutSlips(source: string): string {
   return source.replace(/,\s*([}\]])/g, "$1").replace(/[“”]/g, '"');
 }
 
-/** Why a block that looks like a call is not JSON, and how to write it: sent back to Gemini. */
-function notJson(block: string): string {
-  const start = block.indexOf("{");
+/** The first call of a block that is not JSON (else its first object): why, and how to write it. Sent back to Gemini. */
+function brokenCall(block: string): ParseProblem {
+  let start = -1;
+  for (let i = block.indexOf("{"); i >= 0 && start < 0; i = block.indexOf("{", i + 1))
+    if (CALL_START.test(block.slice(i, i + 40)) && !objectAt(block, i)) start = i;
+  if (start < 0) start = block.indexOf("{");
   const end = start < 0 ? -1 : matchBrace(block, start);
   let why = "a { or a string is never closed";
   if (end >= 0) {
@@ -288,7 +387,10 @@ function notJson(block: string): string {
       why = e instanceof Error ? e.message : String(e);
     }
   }
-  return `The block is not valid JSON (${why}). In a JSON string, write each backslash as \\\\, each double quote as \\", and each line break as \\n.`;
+  return {
+    snippet: shorten(block.slice(Math.max(start, 0))),
+    error: `The block is not valid JSON (${why}). In a JSON string, write each backslash as \\\\, each double quote as \\", and each line break as \\n.`,
+  };
 }
 
 /**

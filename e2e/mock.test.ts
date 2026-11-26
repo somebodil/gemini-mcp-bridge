@@ -38,14 +38,19 @@ type MockWindow = { __replies: string[]; __initial: string[]; __sent: string[]; 
 interface Mock {
   page: Page;
   logs: string[];
+  /** The problems the extension wrote to the page's console. */
+  errors: string[];
 }
 
 /** Opens the mock page with scripted replies, runs `fn`, and closes the page even when `fn` fails. */
 async function withMock(replies: string[], fn: (m: Mock) => Promise<void>, opts: { initial?: string[]; delay?: number } = {}): Promise<void> {
   const page = await h.context.newPage();
   const logs: string[] = [];
+  const errors: string[] = [];
   page.on("console", (msg) => {
     if (msg.text().startsWith("[gmb]")) logs.push(msg.text());
+    // as errors only: anything else shows its type in front and fails the checks
+    if (msg.text().startsWith("[MCP Bridge]")) errors.push(msg.type() === "error" ? msg.text() : `(${msg.type()}) ${msg.text()}`);
   });
   try {
     await page.addInitScript(
@@ -61,7 +66,7 @@ async function withMock(replies: string[], fn: (m: Mock) => Promise<void>, opts:
     await page.goto("https://gemini.google.com/app");
     assert.equal(await h.toggle(page), true);
     await page.waitForFunction(() => document.querySelector("gmb-status")?.shadowRoot?.textContent?.includes("tools"), null, { timeout: 10_000 });
-    await fn({ page, logs });
+    await fn({ page, logs, errors });
   } finally {
     await page.close();
   }
@@ -108,6 +113,8 @@ describe("with a mock Gemini", () => {
       // the answer has no call: the extension reads it and sends nothing
       await waitLog(m, /reply finished/, 2);
       await waitLog(m, /calls \[\] \[\]/);
+      // nothing went wrong: nothing in the console
+      assert.deepEqual(m.errors, []);
       assert.equal((await sent(page)).length, 2);
       assert.match((await cardTexts(page))[0], /list_directory.*Done/);
       const chips = await page.locator(".gmb-chip").allInnerTexts();
@@ -166,26 +173,51 @@ describe("with a mock Gemini", () => {
   it("runs auto tools without asking, several calls in order", async () => {
     await h.setSettings(auto("read_file", "list_directory"));
     const two = `${call("list_directory", { path: h.dir })}\n${call("read_file", { path: join(h.dir, "a-file.txt") })}`;
-    await withMock([two, "Done."], async ({ page }) => {
+    await withMock([two, "Done."], async ({ page, errors }) => {
       await say(page, "look");
       await waitSent(page, 2);
       assert.match((await sent(page))[1], /#1 list_directory → ok[\s\S]*#2 read_file → ok\n```text\ncontent of a file/);
+      assert.deepEqual(errors, []);
     });
   });
 
   it("answers an unreadable call with an error that Gemini can act on, and shows why on the card", () =>
-    withMock(['```json\n{"mcp_call": {"tool": "read_file", "arguments": {"path": }}}\n```', "Sorry."], async ({ page }) => {
+    withMock(['```json\n{"mcp_call": {"tool": "read_file", "arguments": {"path": }}}\n```', "Sorry."], async ({ page, errors }) => {
       await say(page, "read");
       await waitSent(page, 2);
       assert.match((await sent(page))[1], /#1 mcp_call → error\n```text\nThe block is not valid JSON \(.+\)\. In a JSON string, write each backslash as .+\nYou wrote: /);
       assert.match((await cardTexts(page))[0], /mcp_call.*Unreadable call.*The block is not valid JSON \(/);
+      assert.match(errors.join("\n"), /^\[MCP Bridge\] A call in the reply could not be read: The block is not valid JSON \(/);
     }));
 
+  it("reports a broken call that holds a {}, instead of waiting without a word", () =>
+    withMock(['```json\n{"mcp_call": {"tool": "write_file", "arguments": {"path" "a.js", "content": "const d = {};"}}}\n```', "Sorry."], async ({ page, errors }) => {
+      await say(page, "write");
+      await waitSent(page, 2);
+      assert.match((await sent(page))[1], /#1 mcp_call → error\n```text\nThe block is not valid JSON \(/);
+      assert.match(errors.join("\n"), /A call in the reply could not be read/);
+    }));
+
+  it("writes a file whose content came across lines with bare double quotes and braces", async () => {
+    await h.setSettings(auto("write_file"));
+    const path = `${h.dir}/bare.js`;
+    const code = 'const d = {};\nconsole.log("hi", d);\n';
+    const reply = `Writing it.\n\`\`\`json\n{"mcp_call": {"tool": "write_file", "arguments": {"path": ${JSON.stringify(path)}, "content": "${code}"}}}\n\`\`\``;
+    await withMock([reply, "Done."], async ({ page, errors }) => {
+      await say(page, "write");
+      await waitSent(page, 2);
+      assert.match((await sent(page))[1], /#1 write_file → ok/);
+      assert.equal(readFileSync(path, "utf8"), code);
+      assert.deepEqual(errors, []);
+    });
+  });
+
   it("tells Gemini about a tool that does not exist", () =>
-    withMock([call("format_disk", {}), "OK."], async ({ page }) => {
+    withMock([call("format_disk", {}), "OK."], async ({ page, errors }) => {
       await say(page, "x");
       await waitSent(page, 2);
       assert.match((await sent(page))[1], /There is no tool named "format_disk"\. Available tools: run_command, read_file, write_file, list_directory\./);
+      assert.match(errors.join("\n"), /\[MCP Bridge\] format_disk: There is no tool named "format_disk"/);
     }));
 
   it("runs a call written without a code fence, with its card at the end of the reply", async () => {

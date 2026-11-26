@@ -10,6 +10,7 @@
 // the page writes).
 
 import { LAYOUTS_KEY, loadLayouts, storeLayout, type Layout, type Locator, type Pattern } from "../shared/layouts.ts";
+import { problem, problemOnce } from "../shared/report.ts";
 import { deepElements, isOurs, nameOf, parentOf, shadowOf, treesUnder } from "./page.ts";
 
 export { ROLES, type Layout, type Locator, type Pattern, type Role } from "../shared/layouts.ts";
@@ -147,7 +148,8 @@ export function resolve(loc: Locator | undefined): Element | null {
   for (let i = 0; i < loc.length; i++) {
     try {
       el = tree.querySelector(loc[i]);
-    } catch {
+    } catch (e) {
+      problemOnce(`A part of the learned layout is not a valid selector: ${loc[i]}`, e);
       return null;
     }
     if (!el) return null;
@@ -284,7 +286,8 @@ export function textNodesWith(root: Element, needle: string): Text[] {
 export async function loadLayout(site = location.origin): Promise<Layout | null> {
   try {
     return (await loadLayouts())[site] ?? null;
-  } catch {
+  } catch (e) {
+    problem("Could not read the learned layout of this site: the bridge guesses its parts.", e);
     return null;
   }
 }

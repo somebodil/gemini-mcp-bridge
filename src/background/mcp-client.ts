@@ -7,6 +7,7 @@
 
 import pkg from "../../package.json" with { type: "json" };
 import type { ToolInfo } from "../shared/protocol.ts";
+import { failed, problem } from "../shared/report.ts";
 
 const CLIENT_INFO = { name: "gemini-mcp-bridge", version: pkg.version };
 const PROTOCOL_VERSION = "2025-06-18";
@@ -161,7 +162,8 @@ export class McpClient {
     const id = this.nextId++;
     // when the caller cancels, tell the server, so that it stops the work (a server without sessions stops
     // anyway when the connection closes, which a timeout does too)
-    const onAbort = () => void this.notify("notifications/cancelled", { requestId: id, reason: "The user's page went away or the call timed out." }).catch(() => undefined);
+    const onAbort = () =>
+      void this.notify("notifications/cancelled", { requestId: id, reason: "The user's page went away or the call timed out." }).catch(failed(`Could not tell ${this.url} to stop ${method}.`));
     signal?.addEventListener("abort", onAbort, { once: true });
     try {
       return await this.requestOnce(id, method, params, timeoutMs, signal);
@@ -214,6 +216,8 @@ export class McpClient {
     if (!res.ok) {
       done();
       const text = (await res.text().catch(() => "")).slice(0, 300);
+      // every error status, whatever the caller makes of it (400: the server could not read the message)
+      problem(`${this.url} answered ${body.method ?? "the reply to its request"} with HTTP ${res.status}${text ? `: ${text}` : ""}`);
       const hint = res.status === 401 || res.status === 403 ? " Check the token in the extension's options." : "";
       throw new McpError("http", `HTTP ${res.status}${text ? `: ${text}` : ""}.${hint}`, res.status);
     }
@@ -231,10 +235,13 @@ export class McpClient {
         const { value, done } = await reader.read();
         if (done) return undefined;
         for (const data of parser.push(value)) {
+          // an event without data (a server primes the stream for resuming with one): nothing to read
+          if (!data.trim()) continue;
           let msg: JsonRpcMessage;
           try {
             msg = JSON.parse(data) as JsonRpcMessage;
-          } catch {
+          } catch (e) {
+            problem(`${this.url} sent an event that is not JSON; it was skipped: ${data.slice(0, 300)}`, e);
             continue;
           }
           if (msg.id === id && (msg.result !== undefined || msg.error)) return msg;
@@ -259,8 +266,9 @@ export class McpClient {
       const { res, done } = await this.post(reply, 10_000);
       await res.body?.cancel();
       done();
-    } catch {
-      // nothing to do: the server will time out its request
+    } catch (e) {
+      // the server will time out its request
+      problem(`Could not answer the request "${msg.method}" of ${this.url}.`, e);
     }
   }
 }

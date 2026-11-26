@@ -160,6 +160,29 @@ describe("protocol details", () => {
     }
   });
 
+  it("writes every error status to the console, with what the server said, and skips events without data", async (t) => {
+    const errors = t.mock.method(console, "error", () => undefined);
+    const s = await rawServer((m, res) => {
+      if (m.method === "tools/call") {
+        res.writeHead(400, { "content-type": "application/json" });
+        return void res.end(JSON.stringify({ jsonrpc: "2.0", error: { code: -32700, message: "Parse error: Invalid JSON" }, id: null }));
+      }
+      // a priming event without data first, as a server that can resume streams sends it
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.end(`id: 1\ndata: \n\ndata: ${JSON.stringify({ jsonrpc: "2.0", id: m.id, result: { tools: [] } })}\n\n`);
+    });
+    try {
+      const c = new McpClient({ url: s.url });
+      assert.deepEqual(await c.listTools(), []);
+      assert.equal(errors.mock.callCount(), 0);
+      await assert.rejects(c.callTool("t", {}, 5000), /HTTP 400: .*Parse error: Invalid JSON/);
+      assert.equal(errors.mock.callCount(), 1);
+      assert.match(String(errors.mock.calls[0].arguments[0]), /^\[MCP Bridge\] http:\/\/127\.0\.0\.1:\d+\/mcp answered tools\/call with HTTP 400: .*Parse error: Invalid JSON/);
+    } finally {
+      s.close();
+    }
+  });
+
   it("ends its session on close", async () => {
     const s = await rawServer((m, res) => {
       res.writeHead(200, { "content-type": "application/json" });

@@ -5,6 +5,7 @@ import type { BridgeState, CallReply, PerfServer, PortRequest, Request, ServerCo
 import { loadSettings, PERF_LINES_KEY, PERF_SERVER_KEY, updateSettings } from "../shared/config.ts";
 import { TEST_BUILD } from "../shared/dom.ts";
 import type { ToolInfo } from "../shared/protocol.ts";
+import { failed, problem, problemOnce } from "../shared/report.ts";
 import { allowSite, own, policiesOn } from "../shared/sites.ts";
 import { exposeTools, noSuchTool } from "../shared/tools.ts";
 import { McpClient, McpError, resultToText } from "./mcp-client.ts";
@@ -63,8 +64,11 @@ async function list(c: Conn): Promise<void> {
     c.error = undefined;
     c.listedAt = Date.now();
   } catch (e) {
+    const error = e instanceof Error ? e.message : String(e);
+    // once per error: the pages ask for the tools again and again
+    if (c.status !== "error" || c.error !== error) problem(`MCP server "${c.config.name}" (${c.config.url}): ${error}`, e);
     c.status = "error";
-    c.error = e instanceof Error ? e.message : String(e);
+    c.error = error;
     c.tools = [];
     await c.client.close();
   } finally {
@@ -128,7 +132,7 @@ async function callTool(name: string, args: Record<string, unknown>, approved: b
     const r: CallReply = { ok, text, durationMs: Date.now() - started, ...(needsApproval ? { needsApproval } : {}) };
     // the service worker's console (chrome://extensions, "service worker") shows why a call failed
     if (!ok && !needsApproval && !signal.aborted)
-      console.error(`MCP Bridge: ${name} failed (${r.durationMs} ms): ${text}`, { arguments: args, site, ...(error === undefined ? {} : { error }) });
+      problem(`${name} failed (${r.durationMs} ms): ${text}`, { arguments: args, site, ...(error === undefined ? {} : { error }) });
     return r;
   };
   const settings = await loadSettings();
@@ -186,7 +190,7 @@ function takePerf(lines: unknown): void {
     .slice(0, PERF_MAX_LINES)
     .map((l) => l.replace(/[\r\n]+/g, " ").slice(0, PERF_MAX_LINE));
   if (!clean.length) return;
-  perfQueue = perfQueue.then(() => keepPerf(clean)).catch((e: unknown) => console.warn("MCP Bridge could not keep the performance log:", e));
+  perfQueue = perfQueue.then(() => keepPerf(clean)).catch(failed("Could not keep the performance log."));
 }
 
 async function keepPerf(lines: string[]): Promise<void> {
@@ -211,10 +215,13 @@ async function postWaiting(settings: Settings): Promise<void> {
       perfWaiting = [];
       const server = await sendPerf(settings, lines);
       await chrome.storage.session.set({ [PERF_SERVER_KEY]: server });
-      if (!server.ok) break;
+      if (!server.ok) {
+        if (server.why === "error") problemOnce(`The server did not take the performance log: ${server.error ?? "error"}`);
+        break;
+      }
     }
   } catch (e) {
-    console.warn("MCP Bridge could not pass on the performance log:", e);
+    problem("Could not pass on the performance log.", e);
   } finally {
     perfPosting = false;
   }
@@ -222,7 +229,7 @@ async function postWaiting(settings: Settings): Promise<void> {
 
 /** The options page's Clear: in the queue, so that a batch being kept does not bring the old lines back. */
 function clearPerf(): Promise<void> {
-  perfQueue = perfQueue.then(() => chrome.storage.session.remove(PERF_LINES_KEY)).catch(() => undefined);
+  perfQueue = perfQueue.then(() => chrome.storage.session.remove(PERF_LINES_KEY)).catch(failed("Could not clear the performance log."));
   return perfQueue;
 }
 
@@ -288,11 +295,12 @@ async function running(tabId: number): Promise<boolean> {
   }
 }
 
-/** Puts the page script into the tab, when the tab shows `origin` (any site when not given); returns the site. */
-async function inject(tabId: number, origin?: string): Promise<string> {
+/** Puts the page script into the tab, when the tab shows `origin` (any site when not given); returns the site, or
+ * null when the tab shows another one. */
+async function inject(tabId: number, origin?: string): Promise<string | null> {
   const [r] = await chrome.scripting.executeScript({ target: { tabId }, func: () => location.origin });
   const site = String(r?.result ?? "");
-  if (origin !== undefined && site !== origin) throw new Error(`the tab shows another site (${site})`);
+  if (origin !== undefined && site !== origin) return null;
   await chrome.scripting.executeScript({ target: { tabId }, files: ["content.js"] });
   return site;
 }
@@ -316,7 +324,7 @@ async function toggleTab(tabId: number): Promise<boolean> {
 if (TEST_BUILD) (globalThis as { gmbToggleTab?: typeof toggleTab }).gmbToggleTab = toggleTab;
 
 chrome.action.onClicked.addListener((tab) => {
-  if (tab.id !== undefined) void toggleTab(tab.id).catch((e: unknown) => console.warn("MCP Bridge could not start in this tab:", e));
+  if (tab.id !== undefined) void toggleTab(tab.id).catch(failed(`Could not turn the bridge on or off in the tab ${tab.url ?? tab.id}.`));
 });
 
 // a page that loaded anew has lost the script: on the same site it goes in again
@@ -332,37 +340,45 @@ chrome.tabs.onUpdated.addListener((tabId, info) => {
     }
     try {
       await mark(tabId, await inject(tabId, origin));
-    } catch {
+    } catch (e) {
+      problem(`Could not start the bridge again after the tab loaded anew (${origin}): it is off there now.`, e);
       await mark(tabId, null);
     }
-  })();
+  })().catch(failed("Could not start the bridge again after a tab loaded anew."));
 });
 chrome.tabs.onRemoved.addListener((tabId) => {
   void activeTabs().then((tabs) => {
     if (!(tabId in tabs)) return;
     delete tabs[tabId];
     return chrome.storage.session.set({ [ACTIVE_KEY]: tabs });
-  });
+  }).catch(failed("Could not forget a closed tab."));
 });
 
 chrome.runtime.onMessage.addListener((msg: Request, sender, sendResponse) => {
   if (msg.type === "turnOff") {
-    if (sender.tab?.id !== undefined) void turnOff(sender.tab.id);
+    if (sender.tab?.id !== undefined) void turnOff(sender.tab.id).catch(failed("Could not turn the bridge off in the tab."));
     return false;
   }
   if (msg.type === "getState") {
-    getState(msg.refresh === true, siteOf(sender)).then(sendResponse, (e: unknown) => sendResponse({ error: String(e) }));
+    getState(msg.refresh === true, siteOf(sender)).then(sendResponse, (e: unknown) => {
+      problem("Could not list the tools.", e);
+      sendResponse({ error: String(e) });
+    });
     return true;
   }
   if (msg.type === "allowHere") {
     const site = siteOf(sender);
     if (!/^https?:\/\//.test(site) || typeof msg.tool !== "string") {
+      problem(`"Always allow here" came from a page that is not a web site (${site || "none"}): not kept.`);
       sendResponse(false);
       return false;
     }
     updateSettings((s) => allowSite(s, msg.tool, site)).then(
       () => sendResponse(true),
-      () => sendResponse(false),
+      (e: unknown) => {
+        problem(`Could not keep "Always allow here" for ${msg.tool} on ${site}.`, e);
+        sendResponse(false);
+      },
     );
     return true;
   }
@@ -377,7 +393,7 @@ chrome.runtime.onMessage.addListener((msg: Request, sender, sendResponse) => {
     void clearPerf().then(() => sendResponse(true));
     return true;
   }
-  if (msg.type === "openOptions") void chrome.runtime.openOptionsPage();
+  if (msg.type === "openOptions") void chrome.runtime.openOptionsPage().catch(failed("Could not open the options page."));
   return false;
 });
 
@@ -392,14 +408,17 @@ chrome.runtime.onConnect.addListener((port) => {
     const send = (r: CallReply) => {
       try {
         port.postMessage(r);
-      } catch {
-        // the page went away
+      } catch (e) {
+        problem(`The result of ${msg.tool} could not be passed to the page (it went away).`, e);
       }
     };
-    callTool(msg.tool, msg.arguments ?? {}, msg.approved === true, siteOf(port.sender), ctrl.signal).then(send, (e: unknown) => send({ ok: false, text: `The extension failed: ${String(e)}`, durationMs: 0 }));
+    callTool(msg.tool, msg.arguments ?? {}, msg.approved === true, siteOf(port.sender), ctrl.signal).then(send, (e: unknown) => {
+      problem(`${msg.tool} failed in the extension.`, e);
+      send({ ok: false, text: `The extension failed: ${String(e)}`, durationMs: 0 });
+    });
   });
 });
 
 chrome.runtime.onInstalled.addListener((details) => {
-  if (details.reason === "install") void chrome.runtime.openOptionsPage();
+  if (details.reason === "install") void chrome.runtime.openOptionsPage().catch(failed("Could not open the options page."));
 });

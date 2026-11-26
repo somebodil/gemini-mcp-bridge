@@ -19,6 +19,7 @@ import {
 import { h } from "../shared/dom.ts";
 import { t, type Key } from "../shared/i18n.ts";
 import { LAYOUTS_KEY, loadLayouts, ROLES, storeLayout, type Role } from "../shared/layouts.ts";
+import { failed, problem } from "../shared/report.ts";
 import { allowedOn, GEMINI_SITE, originOf, own, readSites } from "../shared/sites.ts";
 
 let settings: Settings;
@@ -36,11 +37,16 @@ let tryAddress = GEMINI;
 async function update(change: (s: Settings) => void): Promise<void> {
   const before = JSON.stringify(settings);
   let others = false;
-  settings = await updateSettings((fresh) => {
-    // changed elsewhere meanwhile ("Always allow" on a chat page): the change event of that may come too late
-    others = JSON.stringify(fresh) !== before;
-    change(fresh);
-  });
+  try {
+    settings = await updateSettings((fresh) => {
+      // changed elsewhere meanwhile ("Always allow" on a chat page): the change event of that may come too late
+      others = JSON.stringify(fresh) !== before;
+      change(fresh);
+    });
+  } catch (e) {
+    problem("Could not save the settings.", e);
+    return;
+  }
   if (others) renderTools();
   const s = document.getElementById("saved");
   if (s) {
@@ -50,7 +56,12 @@ async function update(change: (s: Settings) => void): Promise<void> {
 }
 
 async function loadState(refresh: boolean): Promise<void> {
-  const got = await chrome.runtime.sendMessage<Request, (BridgeState & { error?: string }) | undefined>({ type: "getState", refresh }).catch(() => undefined);
+  const got = await chrome.runtime.sendMessage<Request, (BridgeState & { error?: string }) | undefined>({ type: "getState", refresh }).catch((e: unknown) => {
+    problem("The extension's service worker did not answer.", e);
+    return undefined;
+  });
+  if (got?.error) problem("The extension could not list the tools of the MCP servers.", got.error);
+  for (const s of got?.servers ?? []) if (s.status === "error") problem(`MCP server "${s.name}" (${s.url}): ${s.error ?? "error"}`);
   state = got && !got.error ? got : undefined;
   for (const paint of painters) paint();
   renderTools();
@@ -276,7 +287,7 @@ async function renderLayouts(): Promise<void> {
     if (missing.length) about.push(t("optMissing", { names: names(missing) }));
     if (l.picked?.length) about.push(t("optPickedParts", { names: names(l.picked) }));
     const del = h("button", {}, t("optDelete"));
-    del.addEventListener("click", () => void storeLayout(site, null));
+    del.addEventListener("click", () => void storeLayout(site, null).catch(failed(`Could not delete the learned layout of ${site}.`)));
     return h("tr", { "data-site": site }, h("td", { class: "mono" }, site), h("td", { class: "muted small" }, about.join(" · ")), h("td", {}, del));
   });
   box.replaceChildren(h("table", {}, h("tbody", {}, ...rows)));
@@ -290,12 +301,15 @@ function perfSection(): HTMLElement[] {
   copy.addEventListener("click", () => {
     void navigator.clipboard.writeText(lines.value).then(
       () => (copy.textContent = `✓ ${t("copied")}`),
-      () => (copy.textContent = t("copyFailed")),
+      (e: unknown) => {
+        copy.textContent = t("copyFailed");
+        problem("Could not copy the performance log.", e);
+      },
     );
     setTimeout(() => (copy.textContent = t("optPerfCopy")), 2000);
   });
   const clear = h("button", {}, t("optPerfClear"));
-  clear.addEventListener("click", () => void chrome.runtime.sendMessage<Request>({ type: "perfClear" }));
+  clear.addEventListener("click", () => void chrome.runtime.sendMessage<Request>({ type: "perfClear" }).catch(failed("Could not clear the performance log.")));
   perfPaint = async () => {
     const got = await chrome.storage.session.get([PERF_LINES_KEY, PERF_SERVER_KEY]);
     const all = (got[PERF_LINES_KEY] as string[] | undefined) ?? [];
@@ -390,4 +404,4 @@ async function main(): Promise<void> {
   await loadState(false);
 }
 
-void main();
+void main().catch(failed("The options page could not start."));

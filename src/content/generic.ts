@@ -18,6 +18,7 @@
 // elements are not on the page (the page changed), it guesses as above.
 
 import { CALL_KEY, looksLikeCall, MARK, parseCalls } from "../shared/protocol.ts";
+import { problem } from "../shared/report.ts";
 import { busyNow, contains, deepText, findAll, letters, matchesPattern, resolve, textNodesWith, type Layout } from "./layout.ts";
 import {
   buttonOf,
@@ -591,7 +592,7 @@ export class GenericPage implements Page {
       if (this.sameConversation()) e.away = 0;
       else {
         if (now - e.away > AWAY_MS) {
-          dbg("the message went to another conversation");
+          problem("The page went to another address, and the message sent is not on it: the bridge stopped waiting for its reply.");
           this.expecting = null;
         }
         this.prog = null;
@@ -635,7 +636,10 @@ export class GenericPage implements Page {
         this.prog = null;
         return { items: () => [], present: () => true, given: e.given };
       }
-      if (!writing && now - e.at > EXPECT_MAX_MS) this.expecting = null;
+      if (!writing && now - e.at > EXPECT_MAX_MS) {
+        problem(`No reply to the message was found within ${Math.round(EXPECT_MAX_MS / 1000)} s: the bridge stopped waiting for it. Learning the page may help.`);
+        this.expecting = null;
+      }
       return null;
     }
     if (busy || writing) return null;

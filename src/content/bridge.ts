@@ -7,6 +7,7 @@
 import type { BridgeState, CallReply, ExposedTool, Request } from "../shared/config.ts";
 import { t } from "../shared/i18n.ts";
 import { buildInstructions, buildToolsUpdate, formatResults, toolsHash, type Outcome, type ParsedCall } from "../shared/protocol.ts";
+import { failed, problem, problemOnce } from "../shared/report.ts";
 import { noSuchTool } from "../shared/tools.ts";
 import { layoutChange, letters, loadLayout, saveLayout, type Layout, type Role } from "./layout.ts";
 import { checkLayout, Learner, outlineItems, withPicked, type RoleResult } from "./learn.ts";
@@ -73,6 +74,10 @@ export function startBridge(page: Page): () => void {
   /** When the status line's "Copy page structure" last copied (it says so for a moment), and whether it could. */
   let copiedAt = 0;
   let copiedOk = false;
+  /** The exchange whose stall the console was told of. */
+  let stuckSaid: Flow | null = null;
+  /** The error of each server the console was told of last. */
+  const serverErrors = new Map<string, string>();
 
   const pill = new Pill({
     generic: page.kind === "generic",
@@ -114,6 +119,7 @@ export function startBridge(page: Page): () => void {
   function alive(): boolean {
     if (stopped) return false;
     if (chrome.runtime?.id) return true;
+    problem("The extension was reloaded or updated: the bridge stopped in this tab. Reload the page to start it again.");
     stop();
     return false;
   }
@@ -122,20 +128,31 @@ export function startBridge(page: Page): () => void {
     if (!alive()) return undefined;
     try {
       return await chrome.runtime.sendMessage<Request, T>(msg);
-    } catch {
-      alive();
+    } catch (e) {
+      if (alive()) problem(`The extension's service worker did not answer (${msg.type}).`, e);
       return undefined;
     }
   }
 
   async function refreshState(force = false): Promise<void> {
     const s = await send<BridgeState & { error?: string }>({ type: "getState", refresh: force });
-    if (s && !s.error) {
+    if (s?.error) problem("The extension could not list the tools of the MCP servers.", s.error);
+    else if (s) {
       state = s;
       stateAt = Date.now();
       syncPerf();
+      tellServerErrors(s);
     }
     render();
+  }
+
+  /** A server that cannot be reached, or lists no tools: in the console when its error is new. */
+  function tellServerErrors(s: BridgeState): void {
+    for (const server of s.servers) {
+      const error = server.status === "error" ? (server.error ?? "error") : "";
+      if (error && serverErrors.get(server.id) !== error) problem(`MCP server "${server.name}" (${server.url}): ${error}`);
+      serverErrors.set(server.id, error);
+    }
   }
 
   /** The performance log runs while the settings say so. */
@@ -148,9 +165,9 @@ export function startBridge(page: Page): () => void {
   /** Not through send(): the last lines go out after stop(), and an extension that is gone just loses them. */
   function sendPerf(lines: string[]): void {
     try {
-      void chrome.runtime.sendMessage<Request>({ type: "perf", lines }).catch(() => undefined);
+      void chrome.runtime.sendMessage<Request>({ type: "perf", lines }).catch((e: unknown) => problemOnce("Lines of the performance log were lost: the service worker did not take them.", e));
     } catch {
-      // the extension was reloaded
+      // the extension was reloaded (alive() says so)
     }
   }
 
@@ -166,7 +183,13 @@ export function startBridge(page: Page): () => void {
     if (signal.aborted) return Promise.resolve(cancelled);
     if (!alive()) return Promise.resolve({ ok: false, text: "The browser extension was reloaded; the call did not run.", durationMs: 0 });
     return new Promise((resolve) => {
-      const port = chrome.runtime.connect({ name: "call" });
+      let port: chrome.runtime.Port;
+      try {
+        port = chrome.runtime.connect({ name: "call" });
+      } catch (e) {
+        resolve({ ok: false, text: `The call could not be passed to the browser extension (${String(e)}).`, durationMs: 0 });
+        return;
+      }
       let done = false;
       const ping = setInterval(() => {
         try {
@@ -191,7 +214,11 @@ export function startBridge(page: Page): () => void {
       signal.addEventListener("abort", onAbort, { once: true });
       port.onMessage.addListener((m: CallReply) => finish(m));
       port.onDisconnect.addListener(() => finish({ ok: false, text: "The browser extension stopped during the call.", durationMs: 0 }));
-      port.postMessage({ type: "call", tool, arguments: args, approved });
+      try {
+        port.postMessage({ type: "call", tool, arguments: args, approved });
+      } catch (e) {
+        finish({ ok: false, text: `The call could not be passed to the browser extension (${String(e)}).`, durationMs: 0 });
+      }
     });
   }
 
@@ -199,7 +226,7 @@ export function startBridge(page: Page): () => void {
     try {
       await navigator.clipboard.writeText(text);
       return true;
-    } catch {
+    } catch (e) {
       // the page does not allow the clipboard: the old way
       const area = document.createElement("textarea");
       area.value = text;
@@ -208,6 +235,7 @@ export function startBridge(page: Page): () => void {
       area.select();
       const ok = document.execCommand("copy");
       area.remove();
+      if (!ok) problem("Could not copy to the clipboard.", e);
       return ok;
     }
   }
@@ -317,7 +345,7 @@ export function startBridge(page: Page): () => void {
               if (notice?.kind === "results") notice = null;
             }
           } else {
-            dbg("the text did not go into the input box");
+            problem(`The ${along.join(" and ")} did not go into the input box: the page's editor did not take the text. The message goes out as the user wrote it.`);
             given = undefined;
             along.length = 0;
             notice = { kind: "sendFailed", text: t("notInBox") };
@@ -327,7 +355,7 @@ export function startBridge(page: Page): () => void {
         page.expect(page.editorText(), given);
       } catch (err) {
         // the user's message goes out in any case, as they wrote it
-        dbg("could not prepare the message", err);
+        problem("Could not put the instructions or the results in front of the message; it goes out as the user wrote it.", err);
       }
       // still holding until the message is out: an Enter meanwhile would add the text a second time
       try {
@@ -339,6 +367,7 @@ export function startBridge(page: Page): () => void {
           // not again: what went in front is in the box already, and the user's next send goes as the page does it
           passNext = true;
           notice = { kind: "sendFailed", text: t("userSendFailed") };
+          problem("The message did not go out: the page's send button or key did not take it. It is still in the input box.");
         }
       } finally {
         holding = false;
@@ -388,8 +417,8 @@ export function startBridge(page: Page): () => void {
     if (!finished) return;
     // the answer came: the instructions reached this conversation
     const key = page.givenKey();
-    if (finished.given && key) void saveGiven(key, finished.given);
-    void handleReply(finished);
+    if (finished.given && key) void saveGiven(key, finished.given).catch(failed("Could not keep that this conversation has the instructions."));
+    void handleReply(finished).catch(failed("Handling the reply failed."));
   }
 
   function onNavigate(from: string): void {
@@ -451,7 +480,7 @@ export function startBridge(page: Page): () => void {
         const rows = it.card.setCalls(it.calls, it.problems, "waiting");
         for (const p of it.problems) {
           // in the DevTools console of the page, whether or not gmb-debug is on
-          console.warn(`[MCP Bridge] a call in Gemini's reply could not be read: ${p.error}\nGemini wrote:\n${p.snippet}`);
+          problem(`A call in the reply could not be read: ${p.error}\nThe reply wrote:\n${p.snippet}`);
           outcomes.push({
             tool: "mcp_call",
             ok: false,
@@ -473,7 +502,11 @@ export function startBridge(page: Page): () => void {
         }
       }
       // the user went to another chat or turned the tools off: the results do not go anywhere
-      if (ctrl.signal.aborted || !f.present()) return;
+      if (ctrl.signal.aborted) return;
+      if (!f.present()) {
+        problem("The reply is no longer on the page (the page drew the conversation anew, or it was deleted): its results were not sent.");
+        return;
+      }
       await deliver(formatResults(outcomes, state?.behavior.maxResultChars ?? 20000));
     } finally {
       if (run === ctrl) run = null;
@@ -494,7 +527,7 @@ export function startBridge(page: Page): () => void {
     }
     if (!tool) {
       const text = noSuchTool(call.tool, state?.tools.map((x) => x.name) ?? []);
-      console.error(`[MCP Bridge] ${call.tool}: ${text}`, { arguments: call.arguments });
+      problem(`${call.tool}: ${text}`, { arguments: call.arguments });
       row.set("error", { output: text });
       return { tool: call.tool, ok: false, text };
     }
@@ -509,7 +542,9 @@ export function startBridge(page: Page): () => void {
       }
       if (decision === "always") {
         known.policy = "auto";
-        void send({ type: "allowHere", tool: known.name });
+        void send<boolean>({ type: "allowHere", tool: known.name }).then((ok) => {
+          if (ok === false) problem(`Could not keep "Always allow here" for ${known.name}: the settings were not saved.`);
+        });
       }
       approved = true;
       return null;
@@ -529,7 +564,7 @@ export function startBridge(page: Page): () => void {
       r = await callTool(call.tool, call.arguments, true, signal);
     }
     // the error as the MCP server or the extension gave it, with what was sent (a cancelled call is no error)
-    if (!r.ok && !signal.aborted) console.error(`[MCP Bridge] ${call.tool} failed (${r.durationMs} ms): ${r.text}`, { arguments: call.arguments });
+    if (!r.ok && !signal.aborted) problem(`${call.tool} failed (${r.durationMs} ms): ${r.text}`, { arguments: call.arguments });
     row.set(r.ok ? "done" : "error", { output: r.text, durationMs: r.durationMs });
     return { tool: call.tool, ok: r.ok, text: r.text };
   }
@@ -586,6 +621,7 @@ export function startBridge(page: Page): () => void {
       flow = null;
       page.unexpect();
       notice = { kind: "sendFailed", text: t("sendFailed") };
+      problem("The results did not go out: the page's send button or key did not take them. They are in the input box.");
     }
     render();
   }
@@ -606,12 +642,18 @@ export function startBridge(page: Page): () => void {
         const what = f.with.map((w) => t(w === "instructions" ? "withInstructions" : w === "update" ? "withUpdate" : "withResults"));
         if (what.length) notes.push(t("flowSentWith", { s: what.join(", ") }));
         if (p?.how === "guessed") notes.push(layout ? t("flowLearnedMissing") : t("flowGuessing"));
+        if (p?.how === "guessed" && layout) problemOnce("The learned layout does not find the reply on this page: the bridge guesses where it is. Learn the page again.");
         if (!p) return { text: t("flowSent"), tone: "busy", notes };
         if (p.writing) return { text: t("flowWriting"), tone: "busy", notes };
         if (p.replySeen && p.calls) return { text: t("flowReplyCalls", { n: p.calls }), tone: "busy", notes };
         if (p.replySeen) return { text: t("flowReplyEnd"), tone: "busy", notes };
         const stuck = now - f.at > STUCK_MS || (f.wroteAt > 0 && now - f.wroteAt > STUCK_AFTER_WRITING_MS);
         if (!stuck) return { text: t("flowWaiting"), tone: "busy", notes };
+        if (stuckSaid !== f) {
+          stuckSaid = f;
+          const what = f.wroteAt > 0 ? `${STUCK_AFTER_WRITING_MS / 1000} s after the page stopped writing` : `${STUCK_MS / 1000} s after sending`;
+          problem(`No finished reply seen ${what} (${p ? `reply seen: ${p.replySeen}, calls: ${p.calls}, found by: ${p.how}` : "the page no longer waits"}). The status menu has "Copy page structure" for a report.`);
+        }
         const actions: FlowView["actions"] = [];
         if (page.kind === "generic") actions.push({ label: layout ? t("learnAgain") : t("learnStart"), run: () => startLearning() });
         const copiedNow = now - copiedAt < 2500;
@@ -664,11 +706,13 @@ export function startBridge(page: Page): () => void {
     learner = null;
     results = { roles: r.roles, saved: !!r.layout };
     dbg("learned", r.layout, r.roles.map((x) => `${x.role}:${x.found}`));
+    const missing = r.roles.filter((x) => x.found === "missing");
+    if (missing.length) problem(`Learning did not find: ${missing.map((x) => `${x.role}${x.note ? ` (${x.note})` : ""}`).join(", ")}.`);
     const learned = r.layout;
     if (learned) {
       setLayout(learned);
       overlay.show(() => outlineItems(learned));
-      void saveLayout(learned).catch((err) => dbg("could not keep the layout", err));
+      void saveLayout(learned).catch(failed("Could not keep the learned layout of this site."));
     }
     render();
   }
@@ -714,12 +758,13 @@ export function startBridge(page: Page): () => void {
   function applyPick(role: Role, el: Element): void {
     const r = withPicked(layout, role, el);
     if ("error" in r) {
+      problem(`The picked element cannot be the ${role}: ${r.error}`, el);
       results = { roles: results?.roles ?? (layout ? checkLayout(layout) : []), saved: !!layout, message: r.error };
       return;
     }
     const l = r.layout;
     setLayout(l);
-    void saveLayout(l).catch((err) => dbg("could not keep the layout", err));
+    void saveLayout(l).catch(failed("Could not keep the layout of this site with the picked element."));
     results = { roles: checkLayout(l), saved: true };
     overlay.show(() => outlineItems(l));
     dbg("picked", role, l);
