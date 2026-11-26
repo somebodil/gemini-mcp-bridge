@@ -22,6 +22,8 @@ Gemini on the web has no API for outside tools, so the extension works through t
    ```
 
 3. The extension shows a card under the block. It runs the call when you press **Run**, or at once for tools you allowed. The call goes to the MCP server on your computer.
+
+   The block is read with `JSON.parse` exactly as Gemini wrote it: nothing in it is fixed or guessed. A block `JSON.parse` cannot read does not run; its error goes onto the card, into the console, and back to Gemini, which writes the call again.
 4. The extension types the results into the input box and sends them. On the page they collapse into a chip too. Gemini continues: it calls more tools or answers you.
 
 Gemini does not know an extension exists. It follows the instructions in the conversation, as it would follow any other instructions.

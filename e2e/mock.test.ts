@@ -185,30 +185,33 @@ describe("with a mock Gemini", () => {
     withMock(['```json\n{"mcp_call": {"tool": "read_file", "arguments": {"path": }}}\n```', "Sorry."], async ({ page, errors }) => {
       await say(page, "read");
       await waitSent(page, 2);
-      assert.match((await sent(page))[1], /#1 mcp_call → error\n```text\nThe block is not valid JSON \(.+\)\. In a JSON string, write each backslash as .+\nYou wrote: /);
-      assert.match((await cardTexts(page))[0], /mcp_call.*Unreadable call.*The block is not valid JSON \(/);
-      assert.match(errors.join("\n"), /^\[MCP Bridge\] A call in the reply could not be read: The block is not valid JSON \(/);
+      assert.match((await sent(page))[1], /#1 mcp_call → error\n```text\nJSON\.parse cannot read the call: .+\. In a JSON string, write each backslash as .+\nYou wrote: /);
+      assert.match((await cardTexts(page))[0], /mcp_call.*Unreadable call.*JSON\.parse cannot read the call: /);
+      assert.match(errors.join("\n"), /^\[MCP Bridge\] A call in the reply could not be read: JSON\.parse cannot read the call: /);
     }));
 
   it("reports a broken call that holds a {}, instead of waiting without a word", () =>
     withMock(['```json\n{"mcp_call": {"tool": "write_file", "arguments": {"path" "a.js", "content": "const d = {};"}}}\n```', "Sorry."], async ({ page, errors }) => {
       await say(page, "write");
       await waitSent(page, 2);
-      assert.match((await sent(page))[1], /#1 mcp_call → error\n```text\nThe block is not valid JSON \(/);
+      assert.match((await sent(page))[1], /#1 mcp_call → error\n```text\nJSON\.parse cannot read the call: /);
       assert.match(errors.join("\n"), /A call in the reply could not be read/);
     }));
 
-  it("writes a file whose content came across lines with bare double quotes and braces", async () => {
+  it("fixes nothing in a call: bare double quotes across lines go back as JSON.parse's error, and the call written again runs", async () => {
     await h.setSettings(auto("write_file"));
     const path = `${h.dir}/bare.js`;
     const code = 'const d = {};\nconsole.log("hi", d);\n';
-    const reply = `Writing it.\n\`\`\`json\n{"mcp_call": {"tool": "write_file", "arguments": {"path": ${JSON.stringify(path)}, "content": "${code}"}}}\n\`\`\``;
-    await withMock([reply, "Done."], async ({ page, errors }) => {
+    const broken = `Writing it.\n\`\`\`json\n{"mcp_call": {"tool": "write_file", "arguments": {"path": ${JSON.stringify(path)}, "content": "${code}"}}}\n\`\`\``;
+    await withMock([broken, call("write_file", { path, content: code }), "Done."], async ({ page, errors }) => {
       await say(page, "write");
-      await waitSent(page, 2);
-      assert.match((await sent(page))[1], /#1 write_file → ok/);
+      await waitSent(page, 3);
+      const [, first, second] = await sent(page);
+      assert.match(first, /#1 mcp_call → error\n```text\nJSON\.parse cannot read the call: Bad control character in string literal/);
+      assert.match(second, /#1 write_file → ok/);
       assert.equal(readFileSync(path, "utf8"), code);
-      assert.deepEqual(errors, []);
+      assert.equal(errors.length, 1, errors.join("\n"));
+      assert.match(errors[0], /A call in the reply could not be read: JSON\.parse cannot read the call/);
     });
   });
 

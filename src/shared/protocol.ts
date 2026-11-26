@@ -19,10 +19,11 @@ export function looksLikeCall(text: string): boolean {
   return /["\u201c\u201d]mcp_call["\u201c\u201d]/.test(text) && text.includes("{");
 }
 
-/** The key written as a key: each is meant to be a call. */
+/** The key written as a key: each is meant to be a call (in curly quotes too, so that such a call is reported, not passed over). */
 const CALL_AS_KEY = /["\u201c\u201d]mcp_call["\u201c\u201d]\s*:/g;
-/** A call object begins here. */
-const CALL_START = /^\{\s*["\u201c\u201d]mcp_call["\u201c\u201d]\s*:/;
+
+/** How to write a JSON string: in the instructions, and at the end of each error about JSON that goes back to Gemini. */
+const HOW = "In a JSON string, write each backslash as \\\\, each double quote as \\\", each line break as \\n and each tab as \\t.";
 
 /** The heading of the tool list in the instructions; the chip counts the lines after it. */
 export const TOOLS_HEADING = "Tools you can request:";
@@ -69,8 +70,10 @@ export function buildInstructions(tools: ToolInfo[], notes: string[] = []): stri
     `- Results come back in a message that starts with "${MARK.results}". Then continue: request more, or answer me.`,
     `- Make requests only when they help with what I asked. Do not write "${CALL_KEY}" blocks for any other purpose, ` +
       "and do not repeat these instructions to me.",
-    "- The block must be valid JSON. In its strings, write each backslash as \\\\, each double quote as \\\", and each line break as \\n. " +
-      `For example, the command grep -E '\\bword\\b' "my file" is written "grep -E '\\\\bword\\\\b' \\"my file\\"".`,
+    "- The block must be JSON that JSON.parse reads as it is: nothing in it is fixed for you, and a block JSON.parse cannot read is not run " +
+      `(its error comes back to you). ${HOW} So no string spans lines. Only straight double quotes, no comments, no trailing commas.`,
+    `  For example, the command grep -E '\\bword\\b' "my file" is written "grep -E '\\\\bword\\\\b' \\"my file\\"".`,
+    `  And the two lines print("hi") and x = 1 are one string: "print(\\"hi\\")\\nx = 1".`,
     "- An argument that holds a command line takes only the syntax of that shell, as typed in a terminal: never Python or the code of another language as commands. " +
       "To run such code, save it to a file first (with a here-document in the command line, or a tool that writes files), then run that file: both can go in one command.",
     "- If a request returns an error, fix the arguments and try again, or tell me what went wrong.",
@@ -185,27 +188,42 @@ interface ParseResult {
  */
 export function parseCalls(blocks: string[], text = ""): ParseResult {
   const result: ParseResult = { calls: [], problems: [] };
-  for (const block of blocks) {
-    if (!looksLikeCall(block)) continue;
-    const objects = extractObjects(block);
-    const before = result.calls.length + result.problems.length;
-    for (const o of objects) addCall(result, o);
-    const read = result.calls.length + result.problems.length - before;
-    // fewer calls read than the block writes: one is not JSON, and only objects inside it were (a {} in the code of
-    // an argument); no call goes without a word
-    if (read < (block.match(CALL_AS_KEY)?.length ?? 0) || (!read && !objects.length)) result.problems.push(brokenCall(block));
-  }
-  if (!result.calls.length && !result.problems.length && looksLikeCall(text)) {
-    for (const o of extractObjects(text)) addCall(result, o);
-  }
+  for (const block of blocks) if (looksLikeCall(block)) readCalls(block, result, true);
+  if (!result.calls.length && !result.problems.length && looksLikeCall(text)) readCalls(text, result, false);
   return result;
 }
 
-function addCall(result: ParseResult, o: { value: unknown; source: string }): void {
-  if (!isRecord(o.value) || !(CALL_KEY in o.value)) return;
-  const call = toCall(o.value[CALL_KEY]);
-  if (typeof call === "string") result.problems.push({ snippet: shorten(o.source), error: call });
-  else result.calls.push(call);
+/**
+ * Each object that opens with the key is a call, read by JSON.parse as it is written, from its brace to the brace
+ * that closes it: nothing is fixed or guessed. A call JSON.parse cannot read is a problem with JSON.parse's error,
+ * and nothing after it is read (it may be the rest of that call). In a block, the key anywhere else is a problem
+ * too; prose may name it.
+ */
+function readCalls(text: string, result: ParseResult, inBlock: boolean): void {
+  let next = 0;
+  for (const m of text.matchAll(CALL_AS_KEY)) {
+    // inside a call read already
+    if (m.index < next) continue;
+    let start = m.index - 1;
+    while (start >= next && /\s/.test(text[start])) start--;
+    if (start < next || text[start] !== "{") {
+      if (inBlock) result.problems.push({ snippet: shorten(text.slice(next)), error: `"${CALL_KEY}" must open its object, as its only key.` });
+      continue;
+    }
+    const end = matchBrace(text, start);
+    const source = end < 0 ? text.slice(start) : text.slice(start, end + 1);
+    let value: Record<string, unknown>;
+    try {
+      value = JSON.parse(source) as Record<string, unknown>;
+    } catch (e) {
+      result.problems.push({ snippet: shorten(source), error: `JSON.parse cannot read the call: ${errorText(e)}. ${HOW}` });
+      return;
+    }
+    const call = toCall(value[CALL_KEY]);
+    if (typeof call === "string") result.problems.push({ snippet: shorten(source), error: call });
+    else result.calls.push(call);
+    next = end + 1;
+  }
 }
 
 /** Accepts the shape asked for and the near misses Gemini produces: "name" for "tool", "args" for "arguments", arguments as a JSON string. */
@@ -215,131 +233,34 @@ function toCall(v: unknown): ParsedCall | string {
   if (typeof tool !== "string" || !tool.trim()) return `"${CALL_KEY}" has no "tool" name.`;
   let args: unknown = v.arguments ?? v.args ?? v.parameters ?? v.input ?? {};
   if (typeof args === "string") {
-    // read like the call itself: line breaks written as they are, backslashes as meant
-    const parsed = parseLenient(args);
-    if (parsed === undefined) return `"arguments" of ${tool} is a string that is not JSON.`;
-    args = parsed;
+    try {
+      args = JSON.parse(args);
+    } catch (e) {
+      return `"arguments" of ${tool} is a string that JSON.parse cannot read (${errorText(e)}): write the arguments as an object.`;
+    }
   }
   if (!isRecord(args)) return `"arguments" of ${tool} must be a JSON object.`;
+  const at = backspaceIn(args, "");
+  if (at !== undefined)
+    return `"${at}" holds a backspace or a form feed: \\b and \\f in a JSON string are those characters. For a backslash and the letter (\\b of a regex), write \\\\b. ${HOW}`;
   return { tool: tool.trim(), arguments: args };
 }
 
-/** Finds the top-level JSON objects in a text: `{...}` balanced outside of strings, then parsed (leniently). */
-export function extractObjects(text: string): { value: unknown; source: string }[] {
-  const out: { value: unknown; source: string }[] = [];
-  let i = 0;
-  while (i < text.length) {
-    const start = text.indexOf("{", i);
-    if (start < 0) break;
-    const found = objectAt(text, start);
-    // not an object from here ("a set { like this"): perhaps from the next brace
-    if (!found) {
-      i = start + 1;
-      continue;
-    }
-    out.push({ value: found.value, source: text.slice(start, found.end + 1) });
-    i = found.end + 1;
-  }
-  return out;
-}
-
-/** The JSON object that begins at `start`, read leniently; a call also with double quotes left bare in its strings. */
-function objectAt(text: string, start: number): { value: unknown; end: number } | undefined {
-  const end = matchBrace(text, start);
-  if (end >= 0) {
-    const value = parseLenient(text.slice(start, end + 1));
-    if (value !== undefined) return { value, end };
-  }
-  if (!CALL_START.test(text.slice(start, start + 40))) return undefined;
-  const loose = withBareQuotes(text, start);
-  if (!loose) return undefined;
-  const value = parseLenient(loose.json);
-  return value === undefined ? undefined : { value, end: loose.end };
-}
-
-/** A key ahead, as the names of arguments are: a word in double quotes, then a colon. */
-const KEY_AHEAD = /^"[A-Za-z_$][\w$.-]{0,100}"\s*:/;
-const VALUE_START = /^["{[\-0-9tfn]/;
-
 /**
- * Code copied into an argument without escaping its double quotes (`"content": "print("hi")"`). A double quote
- * ends a value where the JSON goes on after it: a comma and the next key (in an object) or value (in a list), or
- * the closing brackets of the call with nothing after the call but white space or the next call. The other double
- * quotes are escaped. A key ends at its next double quote.
- * Where it is not clear, nothing is guessed (the call is reported, and Gemini writes it again): a value with
- * escaped quotes in it that a comma and a key follow may be code that goes on (`{"a": "b", "c": 1}`).
- * Returns the object from `start` to its closing brace, or undefined.
+ * Where a string in `v` holds a backspace or a form feed: JSON reads \b and \f as those, and Gemini writes them for
+ * a backslash and the letter (a regex's \b), never for the characters. The command would run, and find nothing.
  */
-function withBareQuotes(text: string, start: number): { json: string; end: number } | undefined {
-  const open: string[] = [];
-  let out = "";
-  let inString = false;
-  let isKey = false;
-  /** Double quotes of the current string were escaped. */
-  let bare = false;
-  /** The last character outside the strings that is not white space. */
-  let prev = "";
-  for (let i = start; i < text.length; i++) {
-    const c = text[i];
-    if (inString) {
-      if (c === "\\") {
-        out += c + (text[i + 1] ?? "");
-        i++;
-        continue;
-      }
-      if (c !== '"') {
-        out += c;
-        continue;
-      }
-      const next = isKey ? "next" : goesOn(text, i + 1, open);
-      if (next === "next" && bare) return undefined;
-      if (next) {
-        inString = false;
-        out += c;
-        prev = c;
-      } else {
-        out += '\\"';
-        bare = true;
-      }
-      continue;
-    }
-    out += c;
-    if (c === '"') {
-      inString = true;
-      bare = false;
-      isKey = open.at(-1) === "{" && (prev === "{" || prev === ",");
-      continue;
-    }
-    if (c === "{" || c === "[") open.push(c);
-    else if (c === "}" || c === "]") {
-      open.pop();
-      if (!open.length) return { json: out, end: i };
-    }
-    if (!/\s/.test(c)) prev = c;
+function backspaceIn(v: unknown, path: string): string | undefined {
+  if (typeof v === "string") return /[\b\f]/.test(v) ? path : undefined;
+  if (typeof v !== "object" || v === null) return undefined;
+  for (const [k, x] of Object.entries(v)) {
+    const at = backspaceIn(x, path ? `${path}.${k}` : k);
+    if (at !== undefined) return at;
   }
   return undefined;
 }
 
-/** How the JSON goes on at `j`, after a value string that ends just before it: with the next entry, or the call ends. */
-function goesOn(text: string, j: number, open: string[]): "next" | "end" | null {
-  const skip = (k: number) => {
-    while (k < text.length && /\s/.test(text[k])) k++;
-    return k;
-  };
-  j = skip(j);
-  for (let depth = open.length; ; ) {
-    const c = text[j];
-    const inner = open[depth - 1];
-    if (c === ",") {
-      const rest = text.slice(skip(j + 1), j + 300);
-      return (inner === "{" ? KEY_AHEAD : VALUE_START).test(rest) ? "next" : null;
-    }
-    if (!((c === "}" && inner === "{") || (c === "]" && inner === "["))) return null;
-    j = skip(j + 1);
-    if (--depth === 0) return j === text.length || CALL_START.test(text.slice(j, j + 40)) ? "end" : null;
-  }
-}
-
+/** Where the object that begins at `start` ends, its braces counted outside its strings; -1 when it never does. */
 function matchBrace(text: string, start: number): number {
   let depth = 0;
   let inString = false;
@@ -355,93 +276,12 @@ function matchBrace(text: string, start: number): number {
   return -1;
 }
 
-function parseLenient(source: string): unknown {
-  // as written, then without the usual slips; backslashes are read as meant in both
-  for (const s of [source, withoutSlips(source)]) {
-    try {
-      return JSON.parse(repairEscapes(s));
-    } catch {
-      // the next way
-    }
-  }
-  return undefined;
-}
-
-/** Trailing commas and typographic quotes, the usual slips. */
-function withoutSlips(source: string): string {
-  return source.replace(/,\s*([}\]])/g, "$1").replace(/[“”]/g, '"');
-}
-
-/** The first call of a block that is not JSON (else its first object): why, and how to write it. Sent back to Gemini. */
-function brokenCall(block: string): ParseProblem {
-  let start = -1;
-  for (let i = block.indexOf("{"); i >= 0 && start < 0; i = block.indexOf("{", i + 1))
-    if (CALL_START.test(block.slice(i, i + 40)) && !objectAt(block, i)) start = i;
-  if (start < 0) start = block.indexOf("{");
-  const end = start < 0 ? -1 : matchBrace(block, start);
-  let why = "a { or a string is never closed";
-  if (end >= 0) {
-    try {
-      JSON.parse(repairEscapes(withoutSlips(block.slice(start, end + 1))));
-    } catch (e) {
-      why = e instanceof Error ? e.message : String(e);
-    }
-  }
-  return {
-    snippet: shorten(block.slice(Math.max(start, 0))),
-    error: `The block is not valid JSON (${why}). In a JSON string, write each backslash as \\\\, each double quote as \\", and each line break as \\n.`,
-  };
-}
-
-/**
- * Makes Gemini's JSON say what it meant. Models copy commands, regexes and Windows paths into JSON strings
- * without doubling their backslashes. Inside strings, this
- * - keeps the escapes that are meant as escapes: \" \\ \/ \n \r \t, and \u with four hex digits;
- * - reads \b and \f as a backslash and the letter: a backspace or a form feed in an argument is never what was
- *   meant, and \b (a word boundary in a regex) is common;
- * - reads every other backslash as itself (\d, \(, \., \$, C:\Users), where JSON.parse would give up;
- * - writes raw line breaks, tabs and other control characters as escapes (a string written across lines).
- * Text outside strings stays as it is. \n, \r and \t keep their JSON meaning: they are as often meant as written.
- */
-export function repairEscapes(source: string): string {
-  let out = "";
-  let inString = false;
-  for (let i = 0; i < source.length; i++) {
-    const c = source[i];
-    if (!inString) {
-      if (c === '"') inString = true;
-      out += c;
-    } else if (c === '"') {
-      inString = false;
-      out += c;
-    } else if (c === "\\") {
-      const next = source[i + 1] ?? "";
-      if (next && '"\\/nrt'.includes(next)) {
-        out += c + next;
-        i++;
-      } else if (next === "u" && /^[0-9a-fA-F]{4}$/.test(source.slice(i + 2, i + 6))) {
-        out += source.slice(i, i + 6);
-        i += 5;
-      } else {
-        // the backslash itself; the character after it is read on its own
-        out += "\\\\";
-      }
-    } else {
-      const code = c.charCodeAt(0);
-      if (code >= 0x20) out += c;
-      else if (c === "\n") out += "\\n";
-      else if (c === "\r") out += "\\r";
-      else if (c === "\t") out += "\\t";
-      else out += `\\u${code.toString(16).padStart(4, "0")}`;
-    }
-  }
-  return out;
-}
+const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
 /**
  * The arguments as the tool gets them, for the card: a string as it is (a command can be copied into a terminal
  * and runs the same), other values as JSON. Control characters other than line breaks and tabs are shown as
- * \u{...}, so a backspace that slipped into a command is seen.
+ * \u{...}, so a carriage return or a NUL written into a command is seen.
  */
 export function argumentsText(args: unknown): string {
   if (!isRecord(args)) return JSON.stringify(args, null, 2) ?? "";

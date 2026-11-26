@@ -5,12 +5,10 @@ import {
   buildInstructions,
   buildToolsUpdate,
   describeTool,
-  extractObjects,
   formatResults,
   looksLikeCall,
   MARK,
   parseCalls,
-  repairEscapes,
   resultsEnd,
   summarizeResults,
   toolsHash,
@@ -76,15 +74,15 @@ describe("parseCalls", () => {
   });
 
   it("ignores code blocks without the key, and blocks that only mention it", () => {
-    assert.deepEqual(parseCalls(['{"tool": "x"}', "print('hi')", "the mcp_call blocks", "mcp_call"]), { calls: [], problems: [] });
+    assert.deepEqual(parseCalls(['{"tool": "x"}', "print('hi')", "the mcp_call blocks", "mcp_call", '{"kind": "mcp_call", "n": {}}']), { calls: [], problems: [] });
   });
 
-  it("accepts the near misses", () => {
+  it("accepts the near misses of the shape, in JSON that JSON.parse reads", () => {
     const r = parseCalls([
       '{"mcp_call": {"name": "a", "args": {"x": 1}}}',
       '{"mcp_call": {"tool": "b", "arguments": "{\\"y\\": 2}"}}',
-      '{"mcp_call": {"tool": "c",}}',
-      "{“mcp_call”: {“tool”: “d”}}",
+      'json\n[{"mcp_call": {"tool": "c"}}]',
+      '{\n  "mcp_call" : {"tool": "d"}\n}',
     ]);
     assert.deepEqual(r.calls, [
       { tool: "a", arguments: { x: 1 } },
@@ -95,11 +93,11 @@ describe("parseCalls", () => {
   });
 
   it("reports blocks it cannot read so that Gemini can retry", () => {
-    const r = parseCalls(['{"mcp_call": {"tool": "a", "arguments": {"x": }}}', '{"mcp_call": {"arguments": {}}}', '{"mcp_call": []}']);
+    const r = parseCalls(['{"mcp_call": {"tool": "a", "arguments": {"x": }}}', '{"mcp_call": {"arguments": {}}}', '{"mcp_call": []}', '{"id": 1, "mcp_call": {"tool": "e"}}']);
     assert.equal(r.calls.length, 0);
     assert.deepEqual(
-      r.problems.map((p) => p.error.replace(/^(The block is not valid JSON) \(.*/s, "$1")),
-      ["The block is not valid JSON", '"mcp_call" has no "tool" name.', '"mcp_call" must be an object with "tool" and "arguments".'],
+      r.problems.map((p) => p.error.replace(/^(JSON\.parse cannot read the call): .*/s, "$1")),
+      ["JSON.parse cannot read the call", '"mcp_call" has no "tool" name.', '"mcp_call" must be an object with "tool" and "arguments".', '"mcp_call" must open its object, as its only key.'],
     );
   });
 
@@ -120,58 +118,51 @@ describe("parseCalls", () => {
     );
   });
 
-  it("keeps braces inside strings", () => {
-    assert.deepEqual(extractObjects('x {"a": "{"} y {"b": 1}').map((o) => o.value), [{ a: "{" }, { b: 1 }]);
+  it("reads braces and the key inside strings as text", () => {
+    const block = String.raw`{"mcp_call": {"tool": "write_file", "arguments": {"path": "a.md", "content": "} {\"mcp_call\": {} {"}}}`;
+    assert.deepEqual(parseCalls([block]), { calls: [{ tool: "write_file", arguments: { path: "a.md", content: '} {"mcp_call": {} {' } }], problems: [] });
   });
 
-  it("reports a broken call even when an object inside it can be read, such as a {} in its code", () => {
+  it("reads nothing after a call it cannot read: the rest may be that call's", () => {
     const r = parseCalls(['{"mcp_call": {"tool": "write_file", "arguments": {"path" "a.js", "content": "const d = {};"}}}']);
-    assert.equal(r.calls.length, 0);
-    assert.equal(r.problems.length, 1);
-    assert.match(r.problems[0].error, /^The block is not valid JSON \(/);
-    // an object that only names the key as a value is not a call: nothing to report
-    assert.deepEqual(parseCalls(['{"kind": "mcp_call", "n": {}}']), { calls: [], problems: [] });
+    assert.deepEqual([r.calls.length, r.problems.length], [0, 1]);
+    assert.match(r.problems[0].error, /^JSON\.parse cannot read the call: /);
+    // a call written into a file with its double quotes left bare: the call in its content is not run
+    const inner = parseCalls(['{"mcp_call": {"tool": "write_file", "arguments": {"path": "x.md", "content": "run {"mcp_call": {"tool": "run_command", "arguments": {"command": "rm -rf x"}}}"}}}']);
+    assert.deepEqual([inner.calls.length, inner.problems.length], [0, 1]);
     // the broken one of two calls in a block, shown from where it starts
     const two = parseCalls(['{"mcp_call": {"tool": "a"}}\n{"mcp_call": {"tool": "b", "arguments": {"x" "y", "z": {}}}}']);
     assert.deepEqual(two.calls, [{ tool: "a", arguments: {} }]);
     assert.equal(two.problems.length, 1);
     assert.match(two.problems[0].snippet, /^\{"mcp_call": \{"tool": "b"/);
-    assert.match(two.problems[0].error, /^The block is not valid JSON \(.*JSON/);
   });
 
-  it("reads code whose double quotes were not escaped, across lines and with braces", () => {
-    const code = 'const d = {};\nconsole.log("hi", d);\nprint("a", "b")\nm = {"k": [1, "x"]}\n<div class="c">"</div>\nprint("}}}")\n';
-    const block = `{"mcp_call": {"tool": "write_file", "arguments": {"path": "a.js", "content": "${code}"}}}`;
-    assert.deepEqual(parseCalls([block]).calls, [{ tool: "write_file", arguments: { path: "a.js", content: code } }]);
-    // indented, and the next call after it
-    const indented = `{\n  "mcp_call": {\n    "tool": "write_file",\n    "arguments": {\n      "path": "b.txt",\n      "content": "say "hi""\n    }\n  }\n}`;
-    assert.deepEqual(parseCalls([indented]).calls[0]?.arguments, { path: "b.txt", content: 'say "hi"' });
-    assert.deepEqual(
-      parseCalls([`${block}\n{"mcp_call": {"tool": "list_directory", "arguments": {"path": "."}}}`]).calls.map((c) => c.tool),
-      ["write_file", "list_directory"],
-    );
+  it("reports a call written with curly quotes, in a block and in plain text", () => {
+    const curly = "{\u201cmcp_call\u201d: {\u201ctool\u201d: \u201cb\u201d}}";
+    assert.match(parseCalls([curly]).problems[0]?.error ?? "", /^JSON\.parse cannot read the call: /);
+    assert.match(parseCalls([], `Sure. ${curly}`).problems[0]?.error ?? "", /^JSON\.parse cannot read the call: /);
   });
 
-  it("does not guess where bare double quotes could end the value in more than one place: it reports the call", () => {
-    for (const content of [
-      // code that goes on after a quote, a comma and a word in quotes
-      'd = {"a": "x", "b": "y"}',
-      'd = {"a": "x", "b": 1}',
-    ]) {
-      const r = parseCalls([`{"mcp_call": {"tool": "write_file", "arguments": {"path": "a.py", "content": "${content}"}}}`]);
-      assert.deepEqual([r.calls.length, r.problems.length], [0, 1], content);
-    }
-    // a value with bare quotes that another key follows
-    const r = parseCalls(['{"mcp_call": {"tool": "write_file", "arguments": {"content": "say "hi"", "path": "b.txt"}}}']);
-    assert.deepEqual([r.calls.length, r.problems.length], [0, 1]);
+  it("takes the key in plain text that does not open an object as a mention", () => {
+    assert.deepEqual(parseCalls([], 'Each block holds {"a": 1, "mcp_call": ...}, as I said.'), { calls: [], problems: [] });
   });
 
-  it("reads arguments written as a JSON string like the call itself: line breaks and backslashes as they are", () => {
+  it("reads arguments written as a JSON string with JSON.parse too", () => {
     const asString = (inner: string) => `{"mcp_call": {"tool": "write_file", "arguments": ${JSON.stringify(inner)}}}`;
-    // the line break escaped once only: a raw line break inside the inner JSON
-    assert.deepEqual(parseCalls([asString('{"path": "a.py", "content": "line1\nline2"}')]).calls[0]?.arguments, { path: "a.py", content: "line1\nline2" });
-    assert.deepEqual(parseCalls([asString(String.raw`{"command": "grep '\d+' f"}`)]).calls[0]?.arguments, { command: String.raw`grep '\d+' f` });
-    assert.match(parseCalls([asString("{not json")]).problems[0]?.error ?? "", /is a string that is not JSON/);
+    assert.deepEqual(parseCalls([asString('{"path": "a.py", "content": "line1\\nline2"}')]).calls[0]?.arguments, { path: "a.py", content: "line1\nline2" });
+    // a line break escaped once only: a raw line break inside the inner JSON
+    assert.match(
+      parseCalls([asString('{"path": "a.py", "content": "line1\nline2"}')]).problems[0]?.error ?? "",
+      /^"arguments" of write_file is a string that JSON\.parse cannot read \(.+\): write the arguments as an object\.$/,
+    );
+    assert.match(parseCalls([asString("{not json")]).problems[0]?.error ?? "", /is a string that JSON\.parse cannot read/);
+  });
+
+  it("reports a backspace or a form feed in an argument: JSON's \\b and \\f, written for a regex's \\b", () => {
+    const r = parseCalls([String.raw`{"mcp_call": {"tool": "run_command", "arguments": {"command": "grep -E '\bword\b' f"}}}`]);
+    assert.deepEqual(r.calls, []);
+    assert.match(r.problems[0]?.error ?? "", /^"command" holds a backspace or a form feed: .* write \\\\b\. In a JSON string/);
+    assert.match(parseCalls([String.raw`{"mcp_call": {"tool": "t", "arguments": {"o": {"list": ["a", "\f"]}}}}`]).problems[0]?.error ?? "", /^"o\.list\.1" holds/);
   });
 });
 
@@ -235,11 +226,6 @@ describe("more of the parser", () => {
     assert.deepEqual(parseCalls([], text).calls, [{ tool: "a", arguments: {} }]);
     assert.deepEqual(parseCalls([text]).calls, [{ tool: "a", arguments: {} }]);
   });
-
-  it("finds a call without a fence written with curly quotes", () => {
-    const text = "Sure. {\u201cmcp_call\u201d: {\u201ctool\u201d: \u201cb\u201d}}";
-    assert.deepEqual(parseCalls([], text).calls, [{ tool: "b", arguments: {} }]);
-  });
 });
 
 describe("more of the instructions", () => {
@@ -299,7 +285,7 @@ describe("more of the results", () => {
 });
 
 // ---------------------------------------------------------------------------------------------------------
-// Backslashes, quotes and line breaks: what Gemini writes into a JSON string must reach the tool as meant
+// Backslashes, quotes and line breaks: JSON that JSON.parse reads reaches the tool as meant, other JSON is reported
 
 /** Commands as they should reach the shell, each copied from a terminal. */
 const COMMANDS = [
@@ -338,8 +324,6 @@ const call = (command: string) => ({ mcp_call: { tool: "run_command", arguments:
 /** As Gemini writes it when it forgets that JSON doubles backslashes: only the double quotes escaped. */
 const naive = (command: string) => `{"mcp_call": {"tool": "run_command", "arguments": {"command": "${command.replaceAll('"', '\\"')}"}}}`;
 const commandOf = (block: string) => parseCalls([block]).calls[0]?.arguments.command;
-/** A backslash that JSON reads as an escape: such a command cannot be told from its naive writing. */
-const ambiguous = (command: string) => /\\(["\\/nrt]|u[0-9a-fA-F]{4})/.test(command);
 
 describe("escapes", () => {
   it("gets every command back exactly from correct JSON, compact or indented", () => {
@@ -349,72 +333,13 @@ describe("escapes", () => {
     }
   });
 
-  it("gets the command back when Gemini did not double its backslashes, wherever that is unambiguous", () => {
-    const clear = COMMANDS.filter((c) => !ambiguous(c));
-    assert.ok(clear.length >= 12, `${clear.length} commands`);
-    for (const command of clear) assert.equal(commandOf(naive(command)), command, command);
-  });
-
-  it("reads \\b and \\f as a backslash and the letter: a regex word boundary, not a backspace", () => {
-    assert.equal(commandOf(naive(String.raw`grep -E '\bfoo\b'`)), String.raw`grep -E '\bfoo\b'`);
-    assert.equal(commandOf(naive(String.raw`printf '\f'`)), String.raw`printf '\f'`);
-    assert.equal(repairEscapes(String.raw`{"a": "\b\f"}`), String.raw`{"a": "\\b\\f"}`);
-    // written correctly, it stays as it is
-    assert.equal(repairEscapes(String.raw`{"a": "\\b\\f"}`), String.raw`{"a": "\\b\\f"}`);
-  });
-
-  it("keeps the JSON meaning of \\n, \\t and \\r when they are not doubled", () => {
-    // printf and $'...' print the same either way; a JSON line break is what a write_file content needs
-    assert.equal(commandOf(naive(String.raw`printf 'a\tb\n'`)), "printf 'a\tb\n'");
-    assert.equal(commandOf(naive(String.raw`tr -d '\r'`)), "tr -d '\r'");
-  });
-
   it("keeps the valid escapes as JSON means them", () => {
     const block = String.raw`{"mcp_call": {"tool": "t", "arguments": {"s": "q\"q \\ \/ \n \r \t \u00e9 \uD83D\uDE00 \u0041"}}}`;
     assert.equal(parseCalls([block]).calls[0]?.arguments.s, 'q"q \\ / \n \r \t é 😀 A');
   });
 
-  it("reads every other backslash as itself", () => {
-    const cases: [string, string][] = [
-      [String.raw`"\d \s \w \. \( \) \[ \{ \$ \* \+ \? \| \^ \- \' \; \&"`, String.raw`\d \s \w \. \( \) \[ \{ \$ \* \+ \? \| \^ \- \' \; \&`],
-      [String.raw`"C:\Users\Admin\Desktop"`, String.raw`C:\Users\Admin\Desktop`],
-      [String.raw`"\u12 \uZZZZ \U0041 \x41 \0 \1"`, String.raw`\u12 \uZZZZ \U0041 \x41 \0 \1`],
-      [String.raw`"한\글 \😀"`, String.raw`한\글 \😀`],
-    ];
-    for (const [json, value] of cases) assert.equal(JSON.parse(repairEscapes(json)), value, json);
-  });
-
-  it("writes raw line breaks, tabs and control characters inside strings as escapes, and leaves the rest alone", () => {
-    assert.equal(repairEscapes('{"a": "x\ny\tz\r\u0001"}'), '{"a": "x\\ny\\tz\\r\\u0001"}');
-    const outside = '{\n\t"a" :\r\n "b" }';
-    assert.equal(repairEscapes(outside), outside);
-    // a backslash before a raw line break: a shell line continuation
-    assert.equal(JSON.parse(repairEscapes('"one \\\ntwo"')), "one \\\ntwo");
-    // a backslash at the very end
-    assert.equal(repairEscapes('"a\\'), '"a\\\\');
-  });
-
-  it("reads a file content written across lines, with escapes and naive backslashes mixed", () => {
-    const content = "import re\n\nprint(re.findall(r'\\d+\\.\\d+', \"v1.2 v3.4\"))\n\tdone\n";
-    // across lines, naive backslashes
-    const raw = `{"mcp_call": {"tool": "write_file", "arguments": {"path": "/tmp/a.py", "content": "${content.replaceAll('"', '\\"')}"}}}`;
-    assert.equal(parseCalls([raw]).calls[0]?.arguments.content, content);
-    // \n escapes for the line breaks, and the regex backslashes still single
-    const mixed = raw.replace(/\n/g, "\\n").replace(/\t/g, "\\t");
-    assert.equal(parseCalls([mixed]).calls[0]?.arguments.content, content);
-  });
-
-  it("takes some backslashes doubled and others not in one string", () => {
-    assert.equal(commandOf(String.raw`{"mcp_call": {"tool": "run_command", "arguments": {"command": "grep -c '\\d' a && grep -c '\d' b"}}}`), String.raw`grep -c '\d' a && grep -c '\d' b`);
-  });
-
-  it("repairs the escapes together with the other slips", () => {
-    const block = "{“mcp_call”: {“tool”: “run_command”, “arguments”: {“command”: “grep -E '\\bx\\b' f”,},}}";
-    assert.equal(commandOf(block), String.raw`grep -E '\bx\b' f`);
-  });
-
   it("gets random strings back exactly from JSON.stringify", () => {
-    // every kind of character Gemini puts in an argument, but a backspace or form feed (read as \b and \f)
+    // every kind of character Gemini puts in an argument, but a backspace or form feed (reported, see above)
     const alphabet = ["\\", '"', "'", "/", "b", "f", "n", "r", "t", "u", "0", "A", "{", "}", "[", "]", ",", ":", " ", "\n", "\t", "\r", "$", "`", "한", "😀", "\u0001", "\u007f", "\u2028"];
     let seed = 7;
     const rand = (n: number) => {
@@ -430,24 +355,50 @@ describe("escapes", () => {
     }
   });
 
-  it("says how to write it when the JSON is broken", () => {
-    const hint = /\. In a JSON string, write each backslash as \\\\, each double quote as \\", and each line break as \\n\.$/;
-    const unescaped = parseCalls(['{"mcp_call": {"tool": "run_command", "arguments": {"command": "echo "hi"", "n": }}}']).problems[0];
-    assert.match(unescaped.error, /^The block is not valid JSON \(.*JSON.*\)/);
-    assert.match(unescaped.error, hint);
-    assert.match(unescaped.snippet, /echo "hi"/);
-    const cut = parseCalls(['{"mcp_call": {"tool": "run_command", "arguments": {"command": "ls']).problems[0];
-    assert.match(cut.error, /^The block is not valid JSON \(a \{ or a string is never closed\)/);
-    assert.match(cut.error, hint);
+  it("reports what JSON.parse does not read, with its error and how to write it", () => {
+    const hint = / In a JSON string, write each backslash as \\\\, each double quote as \\", each line break as \\n and each tab as \\t\.$/;
+    const cases: [string, RegExp][] = [
+      // a backslash not doubled
+      [naive(String.raw`grep -E '\d+' f`), /Bad escaped character/],
+      [naive(String.raw`ls C:\Users\me`), /Bad escaped character/],
+      // a line break or a tab as it is, not \n or \t
+      [naive("cat <<'EOF' > a.py\nprint(1)\nEOF"), /Bad control character/],
+      [naive("printf 'a\tb'"), /Bad control character/],
+      // a double quote not escaped
+      ['{"mcp_call": {"tool": "run_command", "arguments": {"command": "echo "hi""}}}', /./],
+      // a trailing comma, a comment, single quotes
+      ['{"mcp_call": {"tool": "a", "arguments": {},}}', /./],
+      ['{"mcp_call": {\n  // list it\n  "tool": "a"}}', /./],
+      ["{\"mcp_call\": {'tool': 'a'}}", /./],
+      // cut off
+      ['{"mcp_call": {"tool": "run_command", "arguments": {"command": "ls', /Unterminated string/],
+    ];
+    for (const [block, why] of cases) {
+      const r = parseCalls([block]);
+      assert.deepEqual(r.calls, [], block);
+      assert.match(r.problems[0]?.error ?? "", /^JSON\.parse cannot read the call: /, block);
+      assert.match(r.problems[0].error, why, block);
+      assert.match(r.problems[0].error, hint, block);
+    }
+    assert.match(parseCalls([cases[4][0]]).problems[0].snippet, /echo "hi"/);
   });
 
-  it("asks Gemini for valid JSON with doubled backslashes, with an example that is valid itself", () => {
+  it("reads a command whose backslashes were not doubled only as JSON means it", () => {
+    // \t and \n are escapes of JSON: printf prints the same either way
+    assert.equal(commandOf(naive(String.raw`printf 'a\tb\n'`)), "printf 'a\tb\n'");
+  });
+
+  it("asks Gemini for JSON that JSON.parse reads, with examples that are valid themselves", () => {
     const text = buildInstructions([readFile]);
-    assert.match(text, /write each backslash as \\\\, each double quote as \\", and each line break as \\n\./);
-    const example = /the command (.+) is written (".+")\.$/m.exec(text);
-    assert.ok(example);
-    assert.equal(JSON.parse(example[2]), example[1]);
-    assert.equal(example[1], `grep -E '\\bword\\b' "my file"`);
+    assert.match(text, /- The block must be JSON that JSON\.parse reads as it is: nothing in it is fixed for you/);
+    assert.match(text, /In a JSON string, write each backslash as \\\\, each double quote as \\", each line break as \\n and each tab as \\t\. So no string spans lines\./);
+    const command = /the command (.+) is written (".+")\.$/m.exec(text);
+    assert.ok(command);
+    assert.equal(JSON.parse(command[2]), command[1]);
+    assert.equal(command[1], `grep -E '\\bword\\b' "my file"`);
+    const lines = /the two lines (.+) and (.+) are one string: (".+")\.$/m.exec(text);
+    assert.ok(lines);
+    assert.equal(JSON.parse(lines[3]), `${lines[1]}\n${lines[2]}`);
   });
 
   it("asks Gemini to keep commands to the shell's syntax", () => {
