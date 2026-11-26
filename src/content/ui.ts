@@ -5,7 +5,7 @@
 import type { BridgeState } from "../shared/config.ts";
 import { h, onTrustedClick, SHADOW_MODE } from "../shared/dom.ts";
 import { t } from "../shared/i18n.ts";
-import type { ParsedCall, ParseProblem } from "../shared/protocol.ts";
+import { argumentsText, type ParsedCall, type ParseProblem } from "../shared/protocol.ts";
 import { ROLES, type Role } from "./layout.ts";
 import type { Found, LearnView } from "./learn.ts";
 import { ROLE_COLOR, roleName } from "./overlay.ts";
@@ -90,7 +90,8 @@ export class Row {
 
   constructor(tool: string, args: unknown) {
     this.tool = tool;
-    this.argsText = args === undefined ? "" : argsShown(JSON.stringify(args, null, 2));
+    // as the tool gets them, not as JSON: a command copied from here runs the same in a terminal
+    this.argsText = args === undefined ? "" : argsShown(argumentsText(args));
     this.stateEl = h("span", { class: "state" });
     this.body = h("div");
     this.el = h("div", { class: "row" }, h("div", { class: "head" }, h("span", {}, "🔧"), h("span", { class: "tool" }, tool), this.stateEl), this.body);
@@ -114,7 +115,7 @@ export class Row {
     this.stateEl.replaceChildren(state === "running" ? h("span", { class: "spin" }) : "", ` ${label}${time}`);
     const parts: Node[] = [];
     // asked about: all of it, however long (nothing of a command hidden below the fold)
-    if (this.argsText && this.argsText !== "{}") parts.push(this.details(t("args"), this.argsText, state === "ask", state === "ask"));
+    if (this.argsText) parts.push(this.details(t("args"), this.argsText, state === "ask", state === "ask"));
     if (detail.note) parts.push(h("div", { class: "muted" }, visible(detail.note)));
     if (detail.output !== undefined) {
       const out = visible(detail.output.length > 4000 ? `${detail.output.slice(0, 4000)}\n...` : detail.output || "(no output)");

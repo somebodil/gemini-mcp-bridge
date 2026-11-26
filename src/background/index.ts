@@ -124,7 +124,13 @@ async function getState(refresh: boolean, site: string): Promise<BridgeState> {
  */
 async function callTool(name: string, args: Record<string, unknown>, approved: boolean, site: string, signal: AbortSignal): Promise<CallReply> {
   const started = Date.now();
-  const reply = (ok: boolean, text: string, needsApproval = false): CallReply => ({ ok, text, durationMs: Date.now() - started, ...(needsApproval ? { needsApproval } : {}) });
+  const reply = (ok: boolean, text: string, needsApproval = false, error?: unknown): CallReply => {
+    const r: CallReply = { ok, text, durationMs: Date.now() - started, ...(needsApproval ? { needsApproval } : {}) };
+    // the service worker's console (chrome://extensions, "service worker") shows why a call failed
+    if (!ok && !needsApproval && !signal.aborted)
+      console.error(`MCP Bridge: ${name} failed (${r.durationMs} ms): ${text}`, { arguments: args, site, ...(error === undefined ? {} : { error }) });
+    return r;
+  };
   const settings = await loadSettings();
   if (!settings.enabled) return reply(false, "MCP Bridge is turned off in the browser.");
   await sync(settings, false);
@@ -151,7 +157,7 @@ async function callTool(name: string, args: Record<string, unknown>, approved: b
     return reply(!r.isError, resultToText(r));
   } catch (e) {
     if (e instanceof McpError && (e.kind === "network" || e.kind === "http")) c.status = "error";
-    return reply(false, e instanceof Error ? e.message : String(e));
+    return reply(false, e instanceof Error ? e.message : String(e), false, e);
   }
 }
 

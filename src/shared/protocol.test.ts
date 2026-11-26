@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  argumentsText,
   buildInstructions,
   buildToolsUpdate,
   describeTool,
@@ -9,6 +10,7 @@ import {
   looksLikeCall,
   MARK,
   parseCalls,
+  repairEscapes,
   resultsEnd,
   summarizeResults,
   toolsHash,
@@ -96,8 +98,8 @@ describe("parseCalls", () => {
     const r = parseCalls(['{"mcp_call": {"tool": "a", "arguments": {"x": }}}', '{"mcp_call": {"arguments": {}}}', '{"mcp_call": []}']);
     assert.equal(r.calls.length, 0);
     assert.deepEqual(
-      r.problems.map((p) => p.error),
-      ["The block is not valid JSON.", '"mcp_call" has no "tool" name.', '"mcp_call" must be an object with "tool" and "arguments".'],
+      r.problems.map((p) => p.error.replace(/^(The block is not valid JSON) \(.*/s, "$1")),
+      ["The block is not valid JSON", '"mcp_call" has no "tool" name.', '"mcp_call" must be an object with "tool" and "arguments".'],
     );
   });
 
@@ -243,5 +245,181 @@ describe("more of the results", () => {
 
   it("summarizes nothing when there is no result line", () => {
     assert.equal(summarizeResults("[MCP Bridge · results]\nno lines"), "");
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------
+// Backslashes, quotes and line breaks: what Gemini writes into a JSON string must reach the tool as meant
+
+/** Commands as they should reach the shell, each copied from a terminal. */
+const COMMANDS = [
+  String.raw`grep -rn "TODO" src/`,
+  String.raw`grep -E '\bfoo\b|\d+\s*\w+' file.txt`,
+  String.raw`sed 's/\(.*\)/[\1]/p' in.txt`,
+  String.raw`sed -E 's/([0-9]+)\.([0-9]+)/\2.\1/g' versions.txt`,
+  String.raw`printf 'a\tb\n'`,
+  String.raw`echo $'line1\nline2'`,
+  String.raw`echo -e "col1\tcol2\r"`,
+  String.raw`find . -name '*.log' -exec rm {} \;`,
+  String.raw`awk -F'\t' '{print $1 "\t" $2}' data.tsv`,
+  String.raw`ls C:\Users\new\table`,
+  String.raw`cat \\server\share\file`,
+  String.raw`echo "it's" 'say "hi"' "a \"quoted\" word"`,
+  String.raw`echo 'it'\''s'`,
+  "echo $HOME $(whoami) `date` ${PATH%%:*}",
+  String.raw`echo \$HOME \`not run\``,
+  String.raw`curl -s 'https://example.com/a?b=1&c=2' | jq '.items[] | {name: .name}'`,
+  String.raw`printf '%s %d%%\n' x 5`,
+  "echo 한글 ✓ 😀",
+  String.raw`echo '{"key": "value", "n": [1, 2], "esc": "a\"b"}' | jq .`,
+  String.raw`perl -pe 's/\s+$//' f`,
+  String.raw`echo trailing\\`,
+  String.raw`echo one\
+two`,
+  "cat <<'EOF' > /tmp/x.txt\nline one\n  indented\tline\nEOF",
+  String.raw`tr -d '\r' < in > out`,
+  String.raw`grep -P '\x41\u0041\/' f`,
+  String.raw`python3 -c 'import sys; print(sys.argv[1:])' "a b" \"c\"`,
+  String.raw`git log --format='%H %s' -- 'dir with spaces/'`,
+  String.raw`echo }{ "}" '{' \{`,
+];
+
+const call = (command: string) => ({ mcp_call: { tool: "run_command", arguments: { command } } });
+/** As Gemini writes it when it forgets that JSON doubles backslashes: only the double quotes escaped. */
+const naive = (command: string) => `{"mcp_call": {"tool": "run_command", "arguments": {"command": "${command.replaceAll('"', '\\"')}"}}}`;
+const commandOf = (block: string) => parseCalls([block]).calls[0]?.arguments.command;
+/** A backslash that JSON reads as an escape: such a command cannot be told from its naive writing. */
+const ambiguous = (command: string) => /\\(["\\/nrt]|u[0-9a-fA-F]{4})/.test(command);
+
+describe("escapes", () => {
+  it("gets every command back exactly from correct JSON, compact or indented", () => {
+    for (const command of COMMANDS) {
+      assert.equal(commandOf(JSON.stringify(call(command))), command, command);
+      assert.equal(commandOf(JSON.stringify(call(command), null, 2)), command, command);
+    }
+  });
+
+  it("gets the command back when Gemini did not double its backslashes, wherever that is unambiguous", () => {
+    const clear = COMMANDS.filter((c) => !ambiguous(c));
+    assert.ok(clear.length >= 12, `${clear.length} commands`);
+    for (const command of clear) assert.equal(commandOf(naive(command)), command, command);
+  });
+
+  it("reads \\b and \\f as a backslash and the letter: a regex word boundary, not a backspace", () => {
+    assert.equal(commandOf(naive(String.raw`grep -E '\bfoo\b'`)), String.raw`grep -E '\bfoo\b'`);
+    assert.equal(commandOf(naive(String.raw`printf '\f'`)), String.raw`printf '\f'`);
+    assert.equal(repairEscapes(String.raw`{"a": "\b\f"}`), String.raw`{"a": "\\b\\f"}`);
+    // written correctly, it stays as it is
+    assert.equal(repairEscapes(String.raw`{"a": "\\b\\f"}`), String.raw`{"a": "\\b\\f"}`);
+  });
+
+  it("keeps the JSON meaning of \\n, \\t and \\r when they are not doubled", () => {
+    // printf and $'...' print the same either way; a JSON line break is what a write_file content needs
+    assert.equal(commandOf(naive(String.raw`printf 'a\tb\n'`)), "printf 'a\tb\n'");
+    assert.equal(commandOf(naive(String.raw`tr -d '\r'`)), "tr -d '\r'");
+  });
+
+  it("keeps the valid escapes as JSON means them", () => {
+    const block = String.raw`{"mcp_call": {"tool": "t", "arguments": {"s": "q\"q \\ \/ \n \r \t \u00e9 \uD83D\uDE00 \u0041"}}}`;
+    assert.equal(parseCalls([block]).calls[0]?.arguments.s, 'q"q \\ / \n \r \t é 😀 A');
+  });
+
+  it("reads every other backslash as itself", () => {
+    const cases: [string, string][] = [
+      [String.raw`"\d \s \w \. \( \) \[ \{ \$ \* \+ \? \| \^ \- \' \; \&"`, String.raw`\d \s \w \. \( \) \[ \{ \$ \* \+ \? \| \^ \- \' \; \&`],
+      [String.raw`"C:\Users\Admin\Desktop"`, String.raw`C:\Users\Admin\Desktop`],
+      [String.raw`"\u12 \uZZZZ \U0041 \x41 \0 \1"`, String.raw`\u12 \uZZZZ \U0041 \x41 \0 \1`],
+      [String.raw`"한\글 \😀"`, String.raw`한\글 \😀`],
+    ];
+    for (const [json, value] of cases) assert.equal(JSON.parse(repairEscapes(json)), value, json);
+  });
+
+  it("writes raw line breaks, tabs and control characters inside strings as escapes, and leaves the rest alone", () => {
+    assert.equal(repairEscapes('{"a": "x\ny\tz\r\u0001"}'), '{"a": "x\\ny\\tz\\r\\u0001"}');
+    const outside = '{\n\t"a" :\r\n "b" }';
+    assert.equal(repairEscapes(outside), outside);
+    // a backslash before a raw line break: a shell line continuation
+    assert.equal(JSON.parse(repairEscapes('"one \\\ntwo"')), "one \\\ntwo");
+    // a backslash at the very end
+    assert.equal(repairEscapes('"a\\'), '"a\\\\');
+  });
+
+  it("reads a file content written across lines, with escapes and naive backslashes mixed", () => {
+    const content = "import re\n\nprint(re.findall(r'\\d+\\.\\d+', \"v1.2 v3.4\"))\n\tdone\n";
+    // across lines, naive backslashes
+    const raw = `{"mcp_call": {"tool": "write_file", "arguments": {"path": "/tmp/a.py", "content": "${content.replaceAll('"', '\\"')}"}}}`;
+    assert.equal(parseCalls([raw]).calls[0]?.arguments.content, content);
+    // \n escapes for the line breaks, and the regex backslashes still single
+    const mixed = raw.replace(/\n/g, "\\n").replace(/\t/g, "\\t");
+    assert.equal(parseCalls([mixed]).calls[0]?.arguments.content, content);
+  });
+
+  it("takes some backslashes doubled and others not in one string", () => {
+    assert.equal(commandOf(String.raw`{"mcp_call": {"tool": "run_command", "arguments": {"command": "grep -c '\\d' a && grep -c '\d' b"}}}`), String.raw`grep -c '\d' a && grep -c '\d' b`);
+  });
+
+  it("repairs the escapes together with the other slips", () => {
+    const block = "{“mcp_call”: {“tool”: “run_command”, “arguments”: {“command”: “grep -E '\\bx\\b' f”,},}}";
+    assert.equal(commandOf(block), String.raw`grep -E '\bx\b' f`);
+  });
+
+  it("gets random strings back exactly from JSON.stringify", () => {
+    // every kind of character Gemini puts in an argument, but a backspace or form feed (read as \b and \f)
+    const alphabet = ["\\", '"', "'", "/", "b", "f", "n", "r", "t", "u", "0", "A", "{", "}", "[", "]", ",", ":", " ", "\n", "\t", "\r", "$", "`", "한", "😀", "\u0001", "\u007f", "\u2028"];
+    let seed = 7;
+    const rand = (n: number) => {
+      seed = (seed * 1103515245 + 12345) % 2147483648;
+      return seed % n;
+    };
+    for (let k = 0; k < 500; k++) {
+      let s = "";
+      for (let i = rand(40); i > 0; i--) s += alphabet[rand(alphabet.length)];
+      const args = { s, nested: { list: [s, 1, true, null] } };
+      const block = JSON.stringify({ mcp_call: { tool: "t", arguments: args } }, null, k % 2 ? 2 : undefined);
+      assert.deepEqual(parseCalls([block]).calls[0]?.arguments, args, JSON.stringify(s));
+    }
+  });
+
+  it("says how to write it when the JSON is broken", () => {
+    const hint = /\. In a JSON string, write each backslash as \\\\, each double quote as \\", and each line break as \\n\.$/;
+    const unescaped = parseCalls(['{"mcp_call": {"tool": "run_command", "arguments": {"command": "echo "hi""}}}']).problems[0];
+    assert.match(unescaped.error, /^The block is not valid JSON \(.*JSON.*\)/);
+    assert.match(unescaped.error, hint);
+    assert.match(unescaped.snippet, /echo "hi"/);
+    const cut = parseCalls(['{"mcp_call": {"tool": "run_command", "arguments": {"command": "ls']).problems[0];
+    assert.match(cut.error, /^The block is not valid JSON \(a \{ or a string is never closed\)/);
+    assert.match(cut.error, hint);
+  });
+
+  it("asks Gemini for valid JSON with doubled backslashes, with an example that is valid itself", () => {
+    const text = buildInstructions([readFile]);
+    assert.match(text, /write each backslash as \\\\, each double quote as \\", and each line break as \\n\./);
+    const example = /the command (.+) is written (".+")\.$/m.exec(text);
+    assert.ok(example);
+    assert.equal(JSON.parse(example[2]), example[1]);
+    assert.equal(example[1], `grep -E '\\bword\\b' "my file"`);
+  });
+
+  it("asks Gemini to keep commands to the shell's syntax", () => {
+    assert.match(buildInstructions([readFile]), /command line takes only the syntax of that shell.*never Python or the code of another language\./);
+    assert.match(buildInstructions([readFile]), /save it to a file first .*then run that file\./);
+  });
+});
+
+describe("arguments on the card", () => {
+  it("shows strings as the tool gets them, so that a command copied from the card runs the same", () => {
+    assert.equal(argumentsText({ command: String.raw`grep -E '\bfoo\b' "a b"`, cwd: "/tmp" }), String.raw`command: grep -E '\bfoo\b' "a b"` + "\ncwd: /tmp");
+    assert.equal(argumentsText({ command: "cat <<'EOF'\nx\tz\nEOF" }), "command:\ncat <<'EOF'\nx\tz\nEOF");
+  });
+
+  it("shows other values as JSON, and nothing for no arguments", () => {
+    assert.equal(argumentsText({ n: 3, ok: false, list: [1, "a"], o: { x: null } }), 'n: 3\nok: false\nlist: [\n  1,\n  "a"\n]\no: {\n  "x": null\n}');
+    assert.equal(argumentsText({}), "");
+    assert.equal(argumentsText(undefined), "");
+    assert.equal(argumentsText("text"), '"text"');
+  });
+
+  it("shows control characters, a backspace above all, by their code", () => {
+    assert.equal(argumentsText({ command: "a\bb\fc\rd\u0000e\u007ff\tg" }), "command: a\\u{8}b\\u{C}c\\u{D}d\\u{0}e\\u{7F}f\tg");
   });
 });

@@ -64,6 +64,10 @@ export function buildInstructions(tools: ToolInfo[], notes: string[] = []): stri
     `- Results come back in a message that starts with "${MARK.results}". Then continue: request more, or answer me.`,
     `- Make requests only when they help with what I asked. Do not write "${CALL_KEY}" blocks for any other purpose, ` +
       "and do not repeat these instructions to me.",
+    "- The block must be valid JSON. In its strings, write each backslash as \\\\, each double quote as \\\", and each line break as \\n. " +
+      `For example, the command grep -E '\\bword\\b' "my file" is written "grep -E '\\\\bword\\\\b' \\"my file\\"".`,
+    "- An argument that holds a command line takes only the syntax of that shell, as typed in a terminal: never Python or the code of another language. " +
+      "To run such code, save it to a file first (with a tool that writes files), then run that file.",
     "- If a request returns an error, fix the arguments and try again, or tell me what went wrong.",
     "- Answer me in the language I write in.",
     "",
@@ -180,7 +184,7 @@ export function parseCalls(blocks: string[], text = ""): ParseResult {
     if (!looksLikeCall(block)) continue;
     const objects = extractObjects(block);
     if (!objects.length) {
-      result.problems.push({ snippet: shorten(block), error: "The block is not valid JSON." });
+      result.problems.push({ snippet: shorten(block), error: notJson(block) });
       continue;
     }
     for (const o of objects) addCall(result, o);
@@ -256,17 +260,100 @@ function matchBrace(text: string, start: number): number {
 }
 
 function parseLenient(source: string): unknown {
-  try {
-    return JSON.parse(source);
-  } catch {
-    // trailing commas and typographic quotes are the usual slips
-    const fixed = source.replace(/,\s*([}\]])/g, "$1").replace(/[“”]/g, '"');
+  // as written, then without the usual slips; backslashes are read as meant in both
+  for (const s of [source, withoutSlips(source)]) {
     try {
-      return JSON.parse(fixed);
+      return JSON.parse(repairEscapes(s));
     } catch {
-      return undefined;
+      // the next way
     }
   }
+  return undefined;
+}
+
+/** Trailing commas and typographic quotes, the usual slips. */
+function withoutSlips(source: string): string {
+  return source.replace(/,\s*([}\]])/g, "$1").replace(/[“”]/g, '"');
+}
+
+/** Why a block that looks like a call is not JSON, and how to write it: sent back to Gemini. */
+function notJson(block: string): string {
+  const start = block.indexOf("{");
+  const end = start < 0 ? -1 : matchBrace(block, start);
+  let why = "a { or a string is never closed";
+  if (end >= 0) {
+    try {
+      JSON.parse(repairEscapes(withoutSlips(block.slice(start, end + 1))));
+    } catch (e) {
+      why = e instanceof Error ? e.message : String(e);
+    }
+  }
+  return `The block is not valid JSON (${why}). In a JSON string, write each backslash as \\\\, each double quote as \\", and each line break as \\n.`;
+}
+
+/**
+ * Makes Gemini's JSON say what it meant. Models copy commands, regexes and Windows paths into JSON strings
+ * without doubling their backslashes. Inside strings, this
+ * - keeps the escapes that are meant as escapes: \" \\ \/ \n \r \t, and \u with four hex digits;
+ * - reads \b and \f as a backslash and the letter: a backspace or a form feed in an argument is never what was
+ *   meant, and \b (a word boundary in a regex) is common;
+ * - reads every other backslash as itself (\d, \(, \., \$, C:\Users), where JSON.parse would give up;
+ * - writes raw line breaks, tabs and other control characters as escapes (a string written across lines).
+ * Text outside strings stays as it is. \n, \r and \t keep their JSON meaning: they are as often meant as written.
+ */
+export function repairEscapes(source: string): string {
+  let out = "";
+  let inString = false;
+  for (let i = 0; i < source.length; i++) {
+    const c = source[i];
+    if (!inString) {
+      if (c === '"') inString = true;
+      out += c;
+    } else if (c === '"') {
+      inString = false;
+      out += c;
+    } else if (c === "\\") {
+      const next = source[i + 1] ?? "";
+      if (next && '"\\/nrt'.includes(next)) {
+        out += c + next;
+        i++;
+      } else if (next === "u" && /^[0-9a-fA-F]{4}$/.test(source.slice(i + 2, i + 6))) {
+        out += source.slice(i, i + 6);
+        i += 5;
+      } else {
+        // the backslash itself; the character after it is read on its own
+        out += "\\\\";
+      }
+    } else {
+      const code = c.charCodeAt(0);
+      if (code >= 0x20) out += c;
+      else if (c === "\n") out += "\\n";
+      else if (c === "\r") out += "\\r";
+      else if (c === "\t") out += "\\t";
+      else out += `\\u${code.toString(16).padStart(4, "0")}`;
+    }
+  }
+  return out;
+}
+
+/**
+ * The arguments as the tool gets them, for the card: a string as it is (a command can be copied into a terminal
+ * and runs the same), other values as JSON. Control characters other than line breaks and tabs are shown as
+ * \u{...}, so a backspace that slipped into a command is seen.
+ */
+export function argumentsText(args: unknown): string {
+  if (!isRecord(args)) return JSON.stringify(args, null, 2) ?? "";
+  return Object.entries(args)
+    .map(([k, v]) => {
+      if (typeof v !== "string") return `${k}: ${JSON.stringify(v, null, 2) ?? String(v)}`;
+      let s = "";
+      for (const c of v) {
+        const code = c.charCodeAt(0);
+        s += (code < 0x20 && c !== "\n" && c !== "\t") || code === 0x7f ? `\\u{${code.toString(16).toUpperCase()}}` : c;
+      }
+      return s.includes("\n") ? `${k}:\n${s}` : `${k}: ${s}`;
+    })
+    .join("\n");
 }
 
 function isRecord(v: unknown): v is Record<string, unknown> {

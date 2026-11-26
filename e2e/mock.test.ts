@@ -177,8 +177,8 @@ describe("with a mock Gemini", () => {
     withMock(['```json\n{"mcp_call": {"tool": "read_file", "arguments": {"path": }}}\n```', "Sorry."], async ({ page }) => {
       await say(page, "read");
       await waitSent(page, 2);
-      assert.match((await sent(page))[1], /#1 mcp_call → error\n```text\nThe block is not valid JSON\.\nYou wrote: /);
-      assert.match((await cardTexts(page))[0], /mcp_call.*Unreadable call.*The block is not valid JSON\./);
+      assert.match((await sent(page))[1], /#1 mcp_call → error\n```text\nThe block is not valid JSON \(.+\)\. In a JSON string, write each backslash as .+\nYou wrote: /);
+      assert.match((await cardTexts(page))[0], /mcp_call.*Unreadable call.*The block is not valid JSON \(/);
     }));
 
   it("tells Gemini about a tool that does not exist", () =>

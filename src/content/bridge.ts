@@ -450,6 +450,8 @@ export function startBridge(page: Page): () => void {
       for (const it of items) {
         const rows = it.card.setCalls(it.calls, it.problems, "waiting");
         for (const p of it.problems) {
+          // in the DevTools console of the page, whether or not gmb-debug is on
+          console.warn(`[MCP Bridge] a call in Gemini's reply could not be read: ${p.error}\nGemini wrote:\n${p.snippet}`);
           outcomes.push({
             tool: "mcp_call",
             ok: false,
@@ -492,6 +494,7 @@ export function startBridge(page: Page): () => void {
     }
     if (!tool) {
       const text = noSuchTool(call.tool, state?.tools.map((x) => x.name) ?? []);
+      console.error(`[MCP Bridge] ${call.tool}: ${text}`, { arguments: call.arguments });
       row.set("error", { output: text });
       return { tool: call.tool, ok: false, text };
     }
@@ -525,6 +528,8 @@ export function startBridge(page: Page): () => void {
       row.set("running");
       r = await callTool(call.tool, call.arguments, true, signal);
     }
+    // the error as the MCP server or the extension gave it, with what was sent (a cancelled call is no error)
+    if (!r.ok && !signal.aborted) console.error(`[MCP Bridge] ${call.tool} failed (${r.durationMs} ms): ${r.text}`, { arguments: call.arguments });
     row.set(r.ok ? "done" : "error", { output: r.text, durationMs: r.durationMs });
     return { tool: call.tool, ok: r.ok, text: r.text };
   }
