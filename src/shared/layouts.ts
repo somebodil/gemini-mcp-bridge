@@ -15,14 +15,20 @@ export type Pattern = string;
 /** Which AI answers on a site, as it said itself in its reply to the test message. */
 export type Ai = "claude" | "chatgpt" | "gemini" | "other";
 
-/** The AI a reply named: the three by their names or makers, any other name "other"; undefined when it named none. */
+/**
+ * What the test message lets the AI answer for "ai", and the AI each answer is: ChatGPT answers "codex", the
+ * agent on the command line whose folder it gets. null is none of the three.
+ */
+const ANSWERS = new Map<string, Ai>([
+  ["gemini", "gemini"],
+  ["codex", "chatgpt"],
+  ["claude", "claude"],
+  ["null", "other"],
+]);
+
+/** The AI the reply's "ai" names; undefined for anything but the answers the test message allows (no answer). */
 export function aiNamed(said: string | undefined): Ai | undefined {
-  const s = (said ?? "").trim().toLowerCase();
-  if (!s) return undefined;
-  if (/claude|anthropic/.test(s)) return "claude";
-  if (/gpt|openai|codex/.test(s)) return "chatgpt";
-  if (/gemini|google/.test(s)) return "gemini";
-  return "other";
+  return ANSWERS.get((said ?? "").trim().toLowerCase());
 }
 
 export interface Layout {

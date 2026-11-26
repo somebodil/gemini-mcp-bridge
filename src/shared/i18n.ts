@@ -90,7 +90,7 @@ const en = {
   noteBusyNow: "Writing now",
   noteIdleNow: "Not writing now",
   learnMessage:
-    'This is a test from the Gemini MCP Bridge extension, to learn how this page shows messages and which AI answers on it. Reply with only this JSON in a code block, with "ai" filled in with which AI you are (claude, chatgpt, gemini, or other): {json}',
+    'This is a test from the Gemini MCP Bridge extension, to learn how this page shows messages and which AI answers on it. Reply with only this JSON in a code block. For "ai", put which of these you are, and nothing else: "gemini", "codex" (ChatGPT too) or "claude"; null if you are none of them: {json}',
   flowSent: "Sent",
   flowSentWith: "Sent with {s}",
   withInstructions: "the tool instructions",
@@ -309,7 +309,7 @@ const ko: Record<Key, string> = {
   noteBusyNow: "지금 쓰는 중",
   noteIdleNow: "지금은 쓰지 않음",
   learnMessage:
-    'Gemini MCP Bridge 확장이 이 페이지가 메시지를 보여 주는 방식과 여기서 답하는 AI를 배우려는 시험입니다. 다른 말 없이 다음 JSON만 코드 블록에 담아 답하되, "ai"에는 당신이 어떤 AI인지(claude, chatgpt, gemini, 그 밖이면 other) 채우세요: {json}',
+    'Gemini MCP Bridge 확장이 이 페이지가 메시지를 보여 주는 방식과 여기서 답하는 AI를 배우려는 시험입니다. 다른 말 없이 다음 JSON만 코드 블록에 담아 답하세요. "ai"에는 "gemini", "codex"(ChatGPT도 이것), "claude" 중 당신에 해당하는 것 하나만 넣고, 셋 다 아니면 null을 넣으세요: {json}',
   flowSent: "보냄",
   flowSentWith: "보냄 · {s} 붙임",
   withInstructions: "도구 안내",

@@ -569,8 +569,9 @@ export class Learner {
         if (codeP) layout.code = codeP;
         add("code", codeP ? (p.codeSure ? "ok" : "unsure") : "missing", code);
       } else add("code", "missing", null, t("noteNoCode"));
-      // which AI answered: the "ai" it filled in
-      const ai = aiNamed(/"ai"\s*:\s*"([^"]*)"/.exec(deepText(p.code ?? p.reply))?.[1]);
+      // which AI answered: the "ai" it filled in, a name in quotes or null
+      const said = /"ai"\s*:\s*("[^"]*"|null)/.exec(deepText(p.code ?? p.reply))?.[1];
+      const ai = aiNamed(said?.replace(/^"(.*)"$/, "$1"));
       if (ai) layout.ai = ai;
     } else {
       for (const role of ["list", "mine", "reply", "code"] as const) add(role, "missing", null, t("noteNotSeen"));

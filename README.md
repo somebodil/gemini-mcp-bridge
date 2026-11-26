@@ -103,7 +103,7 @@ The extension can tell the AI of a chat page where its own folder on your comput
 | ChatGPT | `~/.codex` | `~/.codex/AGENTS.md` | `~/.codex/skills` |
 | Claude | `~/.claude` | `~/.claude/CLAUDE.md` | `~/.claude/skills` |
 
-Which AI answers on a page, the AI says itself, once per site: click the corner button, then **Learn this page** (on gemini.google.com too), click the input box and send the test message that goes in. Its reply names the AI. The steps are the same on every page: see [Learn the page](#other-chat-pages-gemini-enterprise-and-others) below.
+Which AI answers on a page, the AI says itself, once per site: click the corner button, then **Learn this page** (on gemini.google.com too), click the input box and send the test message that goes in. Its reply names the AI, with one of `gemini`, `codex` (ChatGPT answers this too) and `claude`, or `null` for none of them. The steps are the same on every page: see [Learn the page](#other-chat-pages-gemini-enterprise-and-others) below.
 
 From then on, the instructions of each new conversation there carry one more line, for example: *Your own folder on my computer is ~/.gemini: your standing instructions are in ~/.gemini/GEMINI.md, your skills in ~/.gemini/skills (a folder for each skill, whose SKILL.md says when and how to use it). A project's folder can have its own GEMINI.md.* A conversation already going gets it with your next message. The AI reads those files with the tools when it needs them, like any other file: with your **Run**, or by itself if you set the tool to *Auto*.
 

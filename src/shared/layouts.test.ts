@@ -3,17 +3,15 @@ import { describe, it } from "node:test";
 import { aiNamed } from "./layouts.ts";
 
 describe("which AI answers", () => {
-  it("is the AI the reply named, by its name or its maker, whatever the case", () => {
-    for (const said of ["claude", "Claude", "Claude Opus", "Anthropic"]) assert.equal(aiNamed(said), "claude", said);
-    for (const said of ["chatgpt", "ChatGPT", "GPT-5", "OpenAI", "codex"]) assert.equal(aiNamed(said), "chatgpt", said);
-    for (const said of ["gemini", "Gemini 3", " GEMINI ", "Google"]) assert.equal(aiNamed(said), "gemini", said);
+  it("is one of the three names the test message allows, whatever the case; ChatGPT answers codex", () => {
+    assert.equal(aiNamed("gemini"), "gemini");
+    assert.equal(aiNamed(" Gemini "), "gemini");
+    assert.equal(aiNamed("codex"), "chatgpt");
+    assert.equal(aiNamed("CLAUDE"), "claude");
   });
 
-  it("is another AI for any other name, and not known when the reply named none", () => {
-    assert.equal(aiNamed("other"), "other");
-    assert.equal(aiNamed("Llama"), "other");
-    assert.equal(aiNamed(""), undefined);
-    assert.equal(aiNamed("  "), undefined);
-    assert.equal(aiNamed(undefined), undefined);
+  it("is another AI for null, and not known for anything the test message does not allow", () => {
+    assert.equal(aiNamed("null"), "other");
+    for (const said of ["", "  ", "chatgpt", "Gemini 3", "other", "constructor", undefined]) assert.equal(aiNamed(said), undefined, String(said));
   });
 });

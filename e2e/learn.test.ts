@@ -124,7 +124,7 @@ describe("learning a page", () => {
     }
   });
 
-  it("tells the AI it learned its own folder; learned again as another AI, the next message tells the new one", async () => {
+  it("tells the AI it learned its own folder; learned again as another AI, the next message tells the new one, or none for null", async () => {
     const page = await open();
     const sent = () => page.evaluate(() => (window as unknown as { __sent: string[] }).__sent);
     const say = async (text: string, n: number) => {
@@ -148,7 +148,8 @@ describe("learning a page", () => {
       assert.ok(first.startsWith(MARK.instructions), first.slice(0, 80));
       assert.match(first, /Your own folder on my computer is ~\/\.claude: your standing instructions are in ~\/\.claude\/CLAUDE\.md, your skills in ~\/\.claude\/skills /);
 
-      await page.evaluate(() => Object.assign(window, { __ai: "ChatGPT" }));
+      // ChatGPT answers "codex"
+      await page.evaluate(() => Object.assign(window, { __ai: "codex" }));
       await page.locator("gmb-status .pill").click();
       await button(page, "Learn again").click();
       await sendTest(page);
@@ -161,6 +162,20 @@ describe("learning a page", () => {
       assert.ok(update.startsWith(MARK.toolsUpdate), update.slice(0, 80));
       assert.match(update, /~\/\.codex\/AGENTS\.md/);
       assert.doesNotMatch(update, /\.claude/);
+
+      // null: none of the three, so no folder
+      await page.evaluate(() => Object.assign(window, { __ai: null }));
+      await page.locator("gmb-status .pill").click();
+      await button(page, "Learn again").click();
+      await sendTest(page);
+      await button(page, "Stop learning").click();
+      await box(page).filter({ hasText: "The AI here says it is an AI other than Claude, ChatGPT and Gemini." }).waitFor();
+      assert.equal((await stored())?.ai, "other");
+      await closeResults(page);
+      await say("last", 6);
+      const last = (await sent())[5];
+      assert.ok(last.startsWith(MARK.toolsUpdate), last.slice(0, 80));
+      assert.doesNotMatch(last, /Your own folder/);
     } finally {
       await page.close();
     }
