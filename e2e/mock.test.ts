@@ -350,6 +350,32 @@ describe("with a mock Gemini", () => {
       second.close();
     }
   });
+
+  it("tells the AI the working folder of a server started again in another folder", async () => {
+    // without sessions, as local-mcp-bridge-server: only its instructions show that it started again
+    const server = await startTestServer({ token: TOKEN, work: "/srv/a" });
+    try {
+      await h.setSettings({ servers: [{ id: "local", name: "local", url: server.url, token: TOKEN, enabled: true }] });
+      await withMock(["Hello.", "Hi."], async (m) => {
+        await say(m.page, "first");
+        await waitLog(m, /reply finished/);
+        const [first] = await sent(m.page);
+        assert.ok(first.includes("Working folder: /srv/a. "), first);
+        server.folders.work = "/srv/b";
+        await m.page.locator("gmb-status .pill").click();
+        await m.page.locator("gmb-status").getByRole("button", { name: "Refresh" }).click();
+        await waitLog(m, /state listed anew/);
+        await say(m.page, "second");
+        await waitSent(m.page, 2);
+        const second = (await sent(m.page))[1];
+        assert.ok(second.startsWith(MARK.toolsUpdate), second.slice(0, 60));
+        assert.ok(second.includes("Working folder: /srv/b. "), second);
+        assert.ok(second.endsWith("second"));
+      });
+    } finally {
+      server.close();
+    }
+  });
 });
 
 describe("approval cannot be skipped", () => {

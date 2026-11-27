@@ -1,6 +1,6 @@
 // Starts a test MCP server and a Chromium with the built extension, and sets the extension's settings.
 
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { chromium, type BrowserContext, type Page, type Worker } from "playwright";
@@ -24,6 +24,8 @@ export interface Harness {
   readonly worker: Worker;
   url: string;
   dir: string;
+  /** The test server's working folder, a folder in `dir` (with the option `work`). */
+  work?: string;
   /** Tools the test server ran, in order. */
   calls: string[];
   /** Lines of the performance log the test server got. */
@@ -34,9 +36,11 @@ export interface Harness {
   close(): Promise<void>;
 }
 
-export async function startHarness(opts: { headless?: boolean; locale?: string; serverName?: string } = {}): Promise<Harness> {
+export async function startHarness(opts: { headless?: boolean; locale?: string; serverName?: string; work?: string } = {}): Promise<Harness> {
   const dir = mkdtempSync(join(tmpdir(), "gmb-e2e-"));
-  const server = await startTestServer({ token: TOKEN, name: opts.serverName, home: dir });
+  const work = opts.work === undefined ? undefined : join(dir, opts.work);
+  if (work) mkdirSync(work, { recursive: true });
+  const server = await startTestServer({ token: TOKEN, name: opts.serverName, home: dir, work });
   const url = server.url;
   const profile = mkdtempSync(join(tmpdir(), "gmb-profile-"));
   const context = await chromium.launchPersistentContext(profile, {
@@ -65,6 +69,7 @@ export async function startHarness(opts: { headless?: boolean; locale?: string; 
     },
     url,
     dir,
+    work,
     calls: server.calls,
     perf: server.perf,
     setSettings,

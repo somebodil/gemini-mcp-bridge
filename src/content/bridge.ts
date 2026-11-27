@@ -140,6 +140,7 @@ export function startBridge(page: Page): () => void {
     else if (s) {
       state = s;
       stateAt = Date.now();
+      dbg(force ? "state listed anew" : "state", s.tools.length);
       syncPerf();
       tellServerErrors(s);
     }

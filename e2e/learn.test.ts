@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { after, before, beforeEach, describe, it } from "node:test";
 import type { Page } from "playwright";
 import type { Layout } from "../src/content/layout.ts";
-import { MARK } from "../src/shared/protocol.ts";
+import { aiHomeNote, MARK } from "../src/shared/protocol.ts";
 import { startHarness, type Harness } from "./harness.ts";
 import { box, button, closeResults, learn, sendTest, startLearning } from "./learning.ts";
 
@@ -146,7 +146,7 @@ describe("learning a page", () => {
       await say("hello", 2);
       const first = (await sent())[1];
       assert.ok(first.startsWith(MARK.instructions), first.slice(0, 80));
-      assert.match(first, /Your own folder on my computer is ~\/\.claude: your standing instructions are in ~\/\.claude\/CLAUDE\.md, your skills in ~\/\.claude\/skills /);
+      assert.ok(first.includes(aiHomeNote("claude")!), first);
 
       // ChatGPT answers "codex"
       await page.evaluate(() => Object.assign(window, { __ai: "codex" }));
@@ -160,7 +160,7 @@ describe("learning a page", () => {
       await say("next", 4);
       const update = (await sent())[3];
       assert.ok(update.startsWith(MARK.toolsUpdate), update.slice(0, 80));
-      assert.match(update, /~\/\.codex\/AGENTS\.md/);
+      assert.ok(update.includes(aiHomeNote("chatgpt")!), update);
       assert.doesNotMatch(update, /\.claude/);
 
       // null: none of the three, so no folder

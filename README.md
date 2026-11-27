@@ -42,19 +42,20 @@ node --version
 
 No `node`, or a version under 20: install the LTS version from [nodejs.org](https://nodejs.org).
 
-Then start the server:
+Then start the server in the folder you work in, its working folder: commands start there, and relative paths.
 
 ```bash
-npx local-mcp-bridge-server
+cd myproject && npx local-mcp-bridge-server
 ```
 
 The first start makes a config file with a random token and prints what the extension needs:
 
 ```
-local-mcp-bridge-server 0.8.1
+local-mcp-bridge-server 0.9.0
   URL:    http://127.0.0.1:7341/mcp
   Token:  3q2-...
   Config: /home/you/.config/local-mcp-bridge-server/config.json (new)
+  Folder: /home/you/myproject (the working folder: commands start here, and relative paths)
   Tools:  run_command, read_file, list_directory
 ```
 
@@ -95,17 +96,17 @@ Open [Gemini](https://gemini.google.com/app) and click the extension's icon: **O
 
 ### Its own folder: learn the page once
 
-The extension can tell the AI of a chat page where its own folder on your computer is, the one its agent on the command line uses:
+The extension can tell the AI of a chat page where its own folder on your computer is, the one its agent on the command line uses, and where the project's own instructions and skills are: in the working folder, the folder local-mcp-bridge-server was started in (0.9.0 and later). Where the two differ, the project's come first.
 
-| AI | Folder | Instructions | Skills |
-|---|---|---|---|
-| Gemini | `~/.gemini` | `~/.gemini/GEMINI.md` | `~/.gemini/skills` |
-| ChatGPT | `~/.codex` | `~/.codex/AGENTS.md` | `~/.codex/skills` |
-| Claude | `~/.claude` | `~/.claude/CLAUDE.md` | `~/.claude/skills` |
+| AI | Folder | Instructions | Skills | The project's, in the working folder |
+|---|---|---|---|---|
+| Gemini | `~/.gemini` | `~/.gemini/GEMINI.md` | `~/.gemini/skills` | `GEMINI.md`, `.gemini/skills` |
+| ChatGPT | `~/.codex` | `~/.codex/AGENTS.md` | `~/.codex/skills` | `AGENTS.md`, `.codex/skills` |
+| Claude | `~/.claude` | `~/.claude/CLAUDE.md` | `~/.claude/skills` | `CLAUDE.md`, `.claude/skills` |
 
 Which AI answers on a page, the AI says itself, once per site: click the corner button, then **Learn this page** (on gemini.google.com too), click the input box and send the test message that goes in. Its reply names the AI, with one of `gemini`, `codex` (ChatGPT answers this too) and `claude`, or `null` for none of them. The steps are the same on every page: see [Learn the page](#other-chat-pages-gemini-enterprise-and-others) below.
 
-From then on, the instructions of each new conversation there carry one more line, for example: *Your own folder on my computer is ~/.gemini: your standing instructions are in ~/.gemini/GEMINI.md, your skills in ~/.gemini/skills (a folder for each skill, whose SKILL.md says when and how to use it). A project's folder can have its own GEMINI.md.* A conversation already going gets it with your next message. The AI reads those files with the tools when it needs them, like any other file: with your **Run**, or by itself if you set the tool to *Auto*.
+From then on, the instructions of each new conversation there carry one more line, for example: *Your own folder on my computer is ~/.gemini: your standing instructions are in ~/.gemini/GEMINI.md, your skills in ~/.gemini/skills (a folder for each skill, whose SKILL.md says when and how to use it). In the working folder, GEMINI.md and .gemini/skills (where there are) are that project's own instructions and skills, and come first where they differ from yours.* A conversation already going gets it with your next message. Started again in another folder, the server names that one, and a message soon after tells the AI: the extension asks the server again once its list is half a minute old, or at once with **Refresh** under the corner button. The AI reads those files with the tools when it needs them, like any other file: with your **Run**, or by itself if you set the tool to *Auto*.
 
 The corner button's panel and the options page show the AI of each learned site. A site not learned, or an AI other than these three, gets no such line.
 

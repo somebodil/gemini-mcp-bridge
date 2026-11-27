@@ -232,20 +232,30 @@ describe("real Gemini as an unknown page, learned first", { skip: !live && "set 
 });
 
 // gemini.google.com is learned like any page: Gemini says which AI it is, and the instructions then tell it its own
-// folder. It finds its skill there: a folder made for the test in the test server's home (~ of its file tools).
+// folder and the project's in the working folder. It finds its skills in both: folders made for the test in the
+// test server's home (~ of its file tools) and working folder; and the project's instructions in the working folder.
 describe("real Gemini, learned: its own folder", { skip: !live && "set GMB_LIVE=1 to run against gemini.google.com" }, () => {
   let h: Harness;
   before(async () => {
-    h = await startHarness();
+    h = await startHarness({ work: "proj" });
   });
   after(async () => {
     await h?.close();
   });
 
-  it("says it is Gemini when the page is learned, then finds its skill in ~/.gemini/skills", { timeout: 360_000 }, async () => {
-    const skill = `otter-${randomBytes(3).toString("hex")}`;
-    mkdirSync(join(h.dir, ".gemini", "skills", skill), { recursive: true });
-    writeFileSync(join(h.dir, ".gemini", "skills", skill, "SKILL.md"), `---\nname: ${skill}\ndescription: Counts the otters in a picture.\n---\n`);
+  it("says it is Gemini when the page is learned, then finds its skills and the project's instructions in the working folder", { timeout: 600_000 }, async () => {
+    const id = randomBytes(3).toString("hex");
+    const skill = `otter-${id}`;
+    const projectSkill = `heron-${id}`;
+    const word = `kestrel-${id}`;
+    const work = h.work!;
+    const addSkill = (root: string, name: string, what: string) => {
+      mkdirSync(join(root, ".gemini", "skills", name), { recursive: true });
+      writeFileSync(join(root, ".gemini", "skills", name, "SKILL.md"), `---\nname: ${name}\ndescription: Counts the ${what} in a picture.\n---\n`);
+    };
+    addSkill(h.dir, skill, "otters");
+    addSkill(work, projectSkill, "herons");
+    writeFileSync(join(work, "GEMINI.md"), `# This project\n\nThe code word of this project is ${word}.\n`);
     // no shell: there ~ is the home folder of this computer, not the test's
     await h.setSettings({ policies: { run_command: "off", write_file: "off", list_directory: "auto", read_file: "auto" } });
     const page = await h.context.newPage();
@@ -269,19 +279,24 @@ describe("real Gemini, learned: its own folder", { skip: !live && "set GMB_LIVE=
     assert.equal(await learnBox.locator("[data-ai]").getAttribute("data-ai"), "gemini", `the reply: ${reply}`);
     await page.locator("gmb-status button", { hasText: "Close" }).click();
 
-    try {
+    // an answer that has all these words, and no tool call in it
+    const ask = async (question: string, words: string[]) => {
       await editor.click();
-      await page.keyboard.type("Which skills do you have on my computer? Name them.");
+      await page.keyboard.type(question);
       await page.keyboard.press("Enter");
       await page.waitForFunction(
-        (w) => [...document.querySelectorAll("model-response")].some((r) => (r as HTMLElement).innerText.includes(w) && !r.querySelector("code-block")),
-        skill,
+        (ws) => [...document.querySelectorAll("model-response")].some((r) => ws.every((w) => (r as HTMLElement).innerText.includes(w)) && !r.querySelector("code-block")),
+        words,
         { timeout: 200_000, polling: 1000 },
       );
+    };
+    try {
+      await ask("Which skills do you have on my computer? Name them.", [skill, projectSkill]);
+      await ask("What is the code word of the project I am working on?", [word]);
     } finally {
       await page.screenshot({ path: join(process.env.SHOTS ?? h.dir, "live-own-folder.png"), fullPage: false });
       console.log(`calls: ${h.calls.join(", ")}\nsent: ${JSON.stringify(await page.locator("user-query").allInnerTexts()).slice(0, 1500)}`);
     }
-    assert.ok(h.calls.includes("list_directory"), `calls: ${h.calls.join(", ")}`);
+    assert.ok(h.calls.includes("list_directory") && h.calls.includes("read_file"), `calls: ${h.calls.join(", ")}`);
   });
 });

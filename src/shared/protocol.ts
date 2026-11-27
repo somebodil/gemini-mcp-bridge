@@ -106,13 +106,18 @@ const AI_HOMES: Record<Exclude<Ai, "other">, [string, string]> = {
   gemini: [".gemini", "GEMINI.md"],
 };
 
-/** The note that tells the AI of the site its own folder on the user's computer; null when it is not one of the three. */
+/**
+ * The note that tells the AI of the site where its instructions and skills are: its own in its folder in the home
+ * folder, the project's in the working folder (the folder local-mcp-bridge-server was started in, which the
+ * server's notes name). null when it is not one of the three.
+ */
 export function aiHomeNote(ai: Ai | undefined): string | null {
   if (!ai || ai === "other") return null;
   const [dir, file] = AI_HOMES[ai];
   return (
     `Your own folder on my computer is ~/${dir}: your standing instructions are in ~/${dir}/${file}, your skills in ~/${dir}/skills ` +
-    `(a folder for each skill, whose SKILL.md says when and how to use it). A project's folder can have its own ${file}.`
+    "(a folder for each skill, whose SKILL.md says when and how to use it). " +
+    `In the working folder, ${file} and ${dir}/skills (where there are) are that project's own instructions and skills, and come first where they differ from yours.`
   );
 }
 

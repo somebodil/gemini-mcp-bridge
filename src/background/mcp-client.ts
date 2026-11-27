@@ -78,6 +78,11 @@ export class McpClient {
     return this.info !== undefined;
   }
 
+  /** Whether the server gave a session (a server without sessions takes each request on its own). */
+  get hasSession(): boolean {
+    return this.sessionId !== undefined;
+  }
+
   async connect(timeoutMs = 10_000): Promise<InitializeResult> {
     this.sessionId = undefined;
     this.protocolVersion = undefined;

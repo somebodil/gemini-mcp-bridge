@@ -14,6 +14,8 @@ interface Conn {
   config: ServerConfig;
   client: McpClient;
   tools: ToolInfo[];
+  /** The server's answer to initialize when it listed `tools` (the client's own is empty while it connects again). */
+  info?: McpClient["info"];
   status: ServerState["status"];
   error?: string;
   listedAt: number;
@@ -58,8 +60,12 @@ async function sync(settings: Settings, refresh: boolean): Promise<void> {
 
 async function list(c: Conn): Promise<void> {
   try {
-    if (!c.client.connected) await c.client.connect();
+    // a server without sessions gives no sign that it started again (in another folder, say, which its
+    // instructions name): it is asked anew each time. One with sessions answers 404 to the old session, and the
+    // client then connects again by itself.
+    if (!c.client.hasSession) await c.client.connect();
     c.tools = await c.client.listTools();
+    c.info = c.client.info;
     c.status = "ok";
     c.error = undefined;
     c.listedAt = Date.now();
@@ -70,6 +76,7 @@ async function list(c: Conn): Promise<void> {
     c.status = "error";
     c.error = error;
     c.tools = [];
+    c.info = undefined;
     await c.client.close();
   } finally {
     c.pending = undefined;
@@ -102,7 +109,7 @@ async function getState(refresh: boolean, site: string): Promise<BridgeState> {
   const ok = live();
   const notes: string[] = [];
   for (const c of ok) {
-    const note = (c.client.info?.instructions ?? "").trim();
+    const note = (c.info?.instructions ?? "").trim();
     if (note) notes.push(ok.length > 1 ? `${c.config.name}: ${note}` : note);
   }
   const servers: ServerState[] = settings.servers.map((cfg) => {
@@ -114,7 +121,7 @@ async function getState(refresh: boolean, site: string): Promise<BridgeState> {
       status: !settings.enabled || !cfg.enabled ? "off" : (c?.status ?? "connecting"),
       error: c?.error,
       toolCount: c?.tools.length ?? 0,
-      serverName: c?.client.info?.serverInfo?.name,
+      serverName: c?.info?.serverInfo?.name,
     };
   });
   const { autoSend, maxResultChars } = settings;
@@ -240,7 +247,7 @@ async function sendPerf(settings: Settings, lines: string[]): Promise<PerfServer
   if (!conns.size) await sync(settings, false);
   let status: PerfServer = { ok: false, why: "none" };
   for (const c of live()) {
-    if (!BRIDGE_SERVERS.has(c.client.info?.serverInfo?.name ?? "")) continue;
+    if (!BRIDGE_SERVERS.has(c.info?.serverInfo?.name ?? "")) continue;
     const got = await postPerf(c, lines);
     if (!status.ok) status = got;
   }

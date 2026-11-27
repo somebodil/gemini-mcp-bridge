@@ -9,7 +9,7 @@ import { TOOLS } from "./test-server.ts";
 
 const models = (process.env.MODELS ?? "4 Neon,4 Carbon").split(",");
 const runs = Number(process.env.RUNS ?? 2);
-const notes = ["Computer: macOS 27.2 (arm64).", "Home folder: /Users/me. Relative paths in the tools start there; ~ works too.", "run_command uses /bin/bash."];
+const notes = ["Computer: macOS 27.2 (arm64).", "Home folder: /Users/me.", "Working folder: /Users/me/proj. Relative paths in the tools start there; ~ is the home folder.", "run_command uses /bin/bash."];
 const question = process.env.Q ?? "What is the magic word in the .txt file in the folder /Users/me/notes on my computer?";
 const text = `${buildInstructions(TOOLS, notes)}\n\n${question}`;
 const b = await chromium.launch({ channel: "chromium" });

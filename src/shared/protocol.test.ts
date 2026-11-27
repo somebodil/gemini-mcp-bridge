@@ -66,14 +66,15 @@ describe("instructions", () => {
     assert.equal(toolsHash([readFile]), toolsHash([readFile]));
     assert.notEqual(toolsHash([readFile]), toolsHash([readFile], ["note"]));
   });
-  it("tells the AI of the site its own folder, its instructions file and its skills, and nothing to another AI", () => {
+  it("tells the AI of the site its own folder, its instructions file and its skills, the project's in the working folder, and nothing to another AI", () => {
     assert.equal(
       aiHomeNote("gemini"),
       "Your own folder on my computer is ~/.gemini: your standing instructions are in ~/.gemini/GEMINI.md, your skills in ~/.gemini/skills " +
-        "(a folder for each skill, whose SKILL.md says when and how to use it). A project's folder can have its own GEMINI.md.",
+        "(a folder for each skill, whose SKILL.md says when and how to use it). " +
+        "In the working folder, GEMINI.md and .gemini/skills (where there are) are that project's own instructions and skills, and come first where they differ from yours.",
     );
-    assert.match(aiHomeNote("claude") ?? "", /~\/\.claude: .* ~\/\.claude\/CLAUDE\.md, .* ~\/\.claude\/skills .* its own CLAUDE\.md\.$/);
-    assert.match(aiHomeNote("chatgpt") ?? "", /~\/\.codex: .* ~\/\.codex\/AGENTS\.md, .* ~\/\.codex\/skills .* its own AGENTS\.md\.$/);
+    assert.match(aiHomeNote("claude") ?? "", /~\/\.claude: .* ~\/\.claude\/CLAUDE\.md, .* ~\/\.claude\/skills .* In the working folder, CLAUDE\.md and \.claude\/skills /);
+    assert.match(aiHomeNote("chatgpt") ?? "", /~\/\.codex: .* ~\/\.codex\/AGENTS\.md, .* ~\/\.codex\/skills .* In the working folder, AGENTS\.md and \.codex\/skills /);
     assert.equal(aiHomeNote("other"), null);
     assert.equal(aiHomeNote(undefined), null);
     // it goes with the notes of the servers: under "About my computer and the tools"

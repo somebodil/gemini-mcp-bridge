@@ -24,6 +24,7 @@ describe("against a stateless server with JSON answers and a token", () => {
     const info = await c.connect();
     assert.equal(info.serverInfo?.name, "test-server");
     assert.equal(info.instructions, "A server for tests.");
+    assert.equal(c.hasSession, false);
     assert.deepEqual(
       (await c.listTools()).map((t) => t.name),
       ["run_command", "read_file", "write_file", "list_directory"],
@@ -59,6 +60,7 @@ describe("against a server with sessions and SSE answers", () => {
       },
     });
     await c.connect();
+    assert.equal(c.hasSession, true);
     assert.equal((await c.listTools()).length, 4);
     assert.ok(session, "the session id is sent after initialize");
     assert.ok(streamed, "the server answered with SSE");

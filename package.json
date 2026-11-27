@@ -1,6 +1,6 @@
 {
   "name": "gemini-mcp-bridge",
-  "version": "0.7.1",
+  "version": "0.8.0",
   "description": "Chrome extension that lets Gemini on the web use the MCP tools of your own computer",
   "private": true,
   "type": "module",
