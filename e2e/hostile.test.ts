@@ -282,8 +282,11 @@ describe("hostile chat pages, learned", () => {
       await press(c.page, "click");
       const run = c.page.locator("gmb-card").getByRole("button", { name: "Run", exact: true });
       await run.waitFor({ timeout: 20_000 });
-      await c.page.waitForTimeout(2500);
-      assert.equal(await c.page.locator("gmb-card").count(), 1);
+      // each redraw takes the card away with the old block until the extension's next look puts it back under the
+      // new one (the click below finds it there): counted for a while, there is never a second card
+      const counts: number[] = [];
+      for (const end = Date.now() + 2500; Date.now() < end; await c.page.waitForTimeout(100)) counts.push(await c.page.locator("gmb-card").count());
+      assert.ok(counts.every((n) => n <= 1), counts.join(" "));
       await run.click();
       await waitSent(c.page, 3);
       await waitLog(c, /answer without calls/, 40_000);
